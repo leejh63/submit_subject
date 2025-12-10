@@ -1,0 +1,5 @@
+메인함수 있어야함 다만 테스트의 경우
+docker pull liqsuq/francinette
+docker run -it --rm -v .:/src liqsuq/francinette
+subject 폴더안에서 위 명령어 실행할 경우 테스트케이스 돌아감
+//-strict 타임아웃의 경우 테스트 코드자체의 시간지연때문에 발생함

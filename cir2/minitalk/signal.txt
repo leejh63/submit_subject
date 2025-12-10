@@ -1,0 +1,343 @@
+✅ 1. 시그널 관련 함수 정리 표
+함수 이름	인자	반환값	설명
+signal	int signum, void (*handler)(int)	이전 핸들러 함수 포인터 or SIG_ERR	단순한 시그널 핸들러 등록
+sigaction	int signum, const struct sigaction *act, struct sigaction *oldact	0 / -1	시그널 핸들러 + 옵션/마스크까지 설정
+kill	pid_t pid, int sig	0 / -1	다른 프로세스에 시그널 전송
+raise	int sig	0 / 비 0	현재 프로세스에 시그널 전송
+sigqueue	pid_t pid, int sig, union sigval val	0 / -1	사용자 데이터 포함한 시그널 전송
+sigemptyset	sigset_t *set	0 / -1	시그널 집합 비우기
+sigfillset	sigset_t *set	0 / -1	시그널 집합 전체 채우기
+sigaddset	sigset_t *set, int signo	0 / -1	특정 시그널 추가
+sigdelset	sigset_t *set, int signo	0 / -1	특정 시그널 제거
+sigismember	const sigset_t *set, int signo	1(포함)/0(X)/-1(에러)	시그널 포함 여부 확인
+sigprocmask	int how, const sigset_t *set, sigset_t *oldset	0 / -1	시그널 마스크 설정/변경
+sigsuspend	const sigset_t *mask	-1	일시적으로 마스크 변경 후 시그널 대기
+pause	없음	-1 (항상)	시그널 올 때까지 대기
+sigaltstack	const stack_t *ss, stack_t *old_ss	0 / -1	대체 스택 설정
+alarm	unsigned int seconds	이전 alarm 값	n초 후 SIGALRM 발생
+sleep	unsigned int seconds	남은 초	sleep 도중 깨어날 수 있음
+
+✅ 2. 핸들러 함수의 타입 정리
+핸들러 타입	사용 조건	함수 원형	설명
+기본형	signal() 또는 sigaction + SA_SIGINFO 미사용	void handler(int sig)	가장 단순한 형태
+확장형 (SA_SIGINFO)	sigaction 사용 + sa_flags = SA_SIGINFO 설정 시	void handler(int sig, siginfo_t *info, void *context)	시그널의 상세 정보까지 확인 가능
+
+✅ 3. 종합 예제 코드
+아래는 다양한 기능을 한 코드에 넣은 종합 시그널 예제입니다.
+
+c
+Copy
+Edit
+#include <stdio.h>
+#include <signal.h>
+#include <string.h>
+#include <stdlib.h>
+#include <unistd.h>
+
+// 확장 핸들러
+void sigusr1_handler(int sig, siginfo_t *info, void *ucontext)
+{
+    printf("[SIGUSR1] from PID: %d, value: %d\n", info->si_pid, info->si_value.sival_int);
+}
+
+// 기본 핸들러
+void sigint_handler(int sig)
+{
+    printf("[SIGINT] Ctrl+C received! Exiting...\n");
+    exit(0);
+}
+
+int main()
+{
+    // SIGUSR1: 확장 핸들러 설정
+    struct sigaction sa_usr1;
+    memset(&sa_usr1, 0, sizeof(sa_usr1));
+    sa_usr1.sa_sigaction = sigusr1_handler;
+    sa_usr1.sa_flags = SA_SIGINFO; // siginfo_t 사용
+    sigemptyset(&sa_usr1.sa_mask);
+    sigaction(SIGUSR1, &sa_usr1, NULL);
+
+    // SIGINT: 기본 핸들러 설정 (Ctrl+C)
+    signal(SIGINT, sigint_handler);
+
+    printf("PID: %d\n", getpid());
+    printf("Send SIGUSR1 with value using `sigqueue` from another terminal.\n");
+    printf("Example: sigqueue %d SIGUSR1 <value>\n", getpid());
+
+    // 시그널 올 때까지 대기
+    while (1)
+        pause();
+}
+🎯 추가 보충 개념
+sigqueue()로 시그널 보내기 (터미널에서):
+
+bash
+Copy
+Edit
+kill -SIGUSR1 <PID>          # 기본 kill
+# 또는
+sigqueue <PID> -s SIGUSR1 -v 123   # value 포함 전송 (glibc util 필요)
+sigaltstack()은 위 예제에 포함되지 않았지만 필요시 스택 오버플로우 대비용으로 확장 가능
+
+필요하다면:
+
+스레드 기반 시그널 처리 (pthread_kill)
+
+sigwaitinfo, sigtimedwait 처럼 동기적 시그널 수신
+
+커널에서 보내는 SIGCHLD, SIGSEGV, SIGBUS 등 특별한 시그널 처리
+
+
+
+
+
+SIGINT, SIG_ERR 등 주요 시그널 상수와 에러 상수
+1. SIGINT 등 시그널 상수
+<signal.h>에는 다양한 시그널 번호 상수가 정의되어 있습니다.
+이들은 운영체제나 C 표준에서 정해진 이름과 번호를 가지며, 프로그램에 특정 이벤트(예: Ctrl-C, 잘못된 메모리 접근 등)가 발생했을 때 운영체제가 해당 시그널을 프로세스에 전달합니다.
+
+대표적인 시그널 상수 목록
+시그널 이름	의미(설명)	기본 동작
+SIGINT	인터럽트(Interrupt, Ctrl-C)	종료
+SIGTERM	종료 요청(Terminate)	종료
+SIGKILL	강제 종료(Kill, 종료 불가피)	종료(무조건)
+SIGSTOP	일시정지(Stop, 일시정지 불가피)	일시정지
+SIGSEGV	잘못된 메모리 접근(Segmentation)	종료(core dump)
+SIGABRT	abort() 호출	종료(core dump)
+SIGFPE	산술 오류(0으로 나누기 등)	종료(core dump)
+SIGILL	잘못된 명령어(Illegal instruction)	종료(core dump)
+SIGQUIT	종료 및 core dump(Ctrl-$$	종료(core dump)
+SIGUSR1	사용자 정의 시그널 1	종료
+SIGUSR2	사용자 정의 시그널 2	종료
+SIGCHLD	자식 프로세스 상태 변화	무시
+SIGALRM	타이머 알람	종료
+SIGPIPE	파이프 오류(읽는 쪽 없음)	종료
+SIGBUS	버스 에러(메모리 접근 오류)	종료(core dump)
+SIGTRAP	트랩(디버깅 등)	종료(core dump)
+SIGCONT	일시정지된 프로세스 계속	계속
+SIGHUP	터미널 종료(Hangup)	종료
+이외에도 시스템에 따라 SIGRTMIN~SIGRTMAX(실시간 시그널) 등 다양한 시그널이 존재합니다.
+
+
+
+1. “두 시그널이 동시에 들어오면?” – 커널이 처리하는 순서
+핵심 포인트	설명
+시그널은 ‘동시에’ 실행되지 않는다	커널 안에서는 각 시그널이 비동기적으로 기록(pending) 된다. 같은 순간 발생해도 우선 pending 비트만 세워지고, 사용자 공간으로 돌아가기 전에 한 번에 하나씩 핸들러가 호출된다.
+동일 종류는 1 개만 pending	SIGALRM이 3 번 연달아 들어와도 커널 비트는 하나라서 “1 회만” 표시된다. 핸들러가 끝난 뒤에 커널이 다시 같은 시그널을 보낼 수 있다.
+우선순서·순서는 구현 의존	리눅스는 보통 오래된 것 먼저(FIFO) 처리를 시도한다. 두 시그널이 정말 같은 지점에서 발생하면 어느 쪽이 먼저 전달될지는 보장되지 않는다.
+중첩(재진입) 가능 여부	시그널 A 핸들러 실행 중에 시그널 B가 도착→
+ B의 핸들러는 즉시 중첩 실행된다(해당 B가 mask 에 차단돼 있지 않다면).
+핸들러 내부에서 커널이 스택 하나 더 얹고 B 핸들러를 호출 → 끝나면 A 핸들러로 복귀.
+
+→ 따라서
+SIGALRM과 SIGINT가 “거의 동시에” 오면
+
+커널이 둘 다 pending 상태로 기록
+
+커널이 하나를 골라 먼저 호출 (예: SIGALRM → test_tick)
+
+test_tick 실행 도중 SIGINT가 아직 pending 이고, mask에 없으므로 즉시 test_goodbye가 중첩돼 실행
+
+test_goodbye 리턴 → test_tick 나머지 부분 마저 실행 → 사용자 코드(메인 루프) 복귀.
+
+
+
+| **목적** | **시그널 핸들러와 일반 코드(메인 스레드)** 가 **안전하게 공유**할 수 있는 최소 단위 타입을 제공. |
+| **보장** | - **하나의 쓰기와 하나의 읽기**가 겹치지 않으면 “원자적(tear-free)으로” 동작한다.<br>- 메모리 폭이 **int 이하**이고, 대부분 플랫폼에서 `int` 나 `volatile int` 와 동일하지만 *반드시* 그렇다고 가정해선 안 됨. |
+| **한계** | - 멀티 쓰레드 환경의 “lock-free 원자성”을 보장하지 않는다.<br>- 복수 스레드가 동시에 **쓰기** 하면 여전히 데이터 레이스 → UB. |
+
+> 📌 **핵심**: *시그널 핸들러는 언제든 메인 플로우를 가로질러 들어올 수 있으므로*  
+> 순수 C 의 언어 차원에서 **안전한 공유 변수**는 `sig_atomic_t` 단 하나뿐입니다.
+
+---
+
+## 왜 `volatile sig_atomic_t` 로 선언할까?
+
+1. **`sig_atomic_t`** → 원자적(read/write 찢김 방지).  
+2. **`volatile`**   → 컴파일러에게 “이 변수는 **예상치 못한 시점**에 변할 수 있어. 최적화로 캐싱하지 마라.”
+
+조합 예:
+
+```c
+#include <signal.h>
+#include <stdio.h>
+#include <unistd.h>
+
+/* 1) 안전 공유 변수 */
+static volatile sig_atomic_t ticked = 0;
+
+void handler(int sig)
+{
+    (void)sig;
+    ticked = 1;        /* 2) write: tear-free */
+}
+
+int main(void)
+{
+    signal(SIGUSR1, handler);
+
+    while (!ticked)    /* 3) read: 매 루프 새로 메모리 로드 */
+        pause();       /* 절전 대기 */
+
+    puts("got SIGUSR1!");
+    return 0;
+}
+
+
+sig_atomic_t ≠ 진정한 “lock-free atomic type”
+→ 시그널 안전을 위한 최소 보장치일 뿐.
+
+여러 스레드가 동시에 쓰거나 복합 연산을 한다면
+→ sig_atomic_t 는 무력, _Atomic / mutex 로 넘어가야 합니다.
+
+
+
+POSIX 시그널과 데이터 전달 ― 한 눈에 끝내는 정리
+목표
+― sigaction · siginfo_t · 시그널 플로우(멀티/싱글 CPU) · sigqueue 데이터 전송 전 과정의 핵심만 모아 “두고 보는 레퍼런스”를 만든다.
+
+1. 핵심 API∙구조체
+요소	핵심 필드	한 줄 설명
+struct sigaction	sa_handler / sa_sigaction
+sa_mask
+sa_flags
+sa_restorer	무엇을 호출할지, 핸들러 동안 무엇을 막을지, 어떻게 돌아갈지 정의
+주요 sa_flags	SA_SIGINFO (3-인자 핸들러) ‖ SA_RESTART (블로킹 syscall 자동 재시작) ‖ SA_NODEFER (동일 시그널 재진입 허용) ‖ SA_RESETHAND (1회용)	사용빈도 순으로 암기
+sigset_t 조작 함수	sigemptyset (초기화) ‖ sigaddset  · sigdelset  · sigfillset	마스크는 함수로만 건드려야 UB 방지
+siginfo_t	si_signo 시그널 번호 ‖ si_code 원인 ‖ si_pid·si_uid 발신자 식별 ‖ si_value (sigqueue/RT용 데이터)	핸들러 두 번째 인자로 넘어오는 메타데이터 묶음
+sigqueue()	sigqueue(pid, signo, union sigval val)	PID · 시그널 · 32/64bit 값 전달용 시스템콜
+
+oldact 매개변수 — 언제 NULL이 아닌가?
+목적	호출 예	실전 쓰임
+핸들러 임시 변경 & 복원	sigaction(sig, &new, &bak); → 작업 → sigaction(sig, &bak, NULL);	라이브러리·프레임워크가 자기 일만 끝나면 원상 복구
+현재 설정 조회	sigaction(sig, NULL, &cur);	디버깅·로깅
+전혀 필요 없음	oldact == NULL	가장 흔한 패턴 (속도 + 스택 절약)
+
+
+
+
+struct sigaction {
+    union {
+        void     (*sa_handler)(int);
+        void     (*sa_sigaction)(int, siginfo_t *, void *);
+    };
+    sigset_t    sa_mask;
+    int         sa_flags;
+    void      (*sa_restorer)(void); // (일반적으로 사용하지 않음, 표준 아님)
+};
+
+
+typedef struct {
+    int      si_signo;   // 시그널 번호
+    int      si_errno;   // 관련 에러 번호
+    int      si_code;    // 시그널 발생 원인 코드
+    pid_t    si_pid;     // 시그널을 보낸 프로세스의 PID
+    uid_t    si_uid;     // 시그널을 보낸 프로세스의 UID
+    int      si_status;  // 종료 상태(자식 프로세스 관련 시그널)
+    clock_t  si_utime;   // 사용자 모드에서 사용한 시간
+    clock_t  si_stime;   // 커널 모드에서 사용한 시간
+    void    *si_addr;    // 잘못된 메모리 접근 주소 등
+    union sigval si_value; // 시그널에 전달된 값
+    // ... 기타 필드(시그널 종류에 따라 다름)
+} siginfo_t;
+
+
+
+
+
+
+
+2. 데이터 전송 패턴
+c
+Copy
+Edit
+/* sender ------------------------------------------------- */
+union sigval v = { .sival_int = 0xBEEF };
+sigqueue(server_pid, SIGUSR1, v);
+
+/* receiver ----------------------------------------------- */
+static void catcher(int s, siginfo_t *i, void *ctx) {
+    dprintf(1, "from=%d  data=%d\n", i->si_pid, i->si_value.sival_int);
+}
+
+struct sigaction sa = {0};
+sa.sa_sigaction = catcher;
+sa.sa_flags     = SA_SIGINFO | SA_RESTART;
+sigemptyset(&sa.sa_mask);
+sigaction(SIGUSR1, &sa, NULL);
+전통 시그널 (SIGUSR1, SIGTERM) → 동일 번호가 이미 pending이면 병합 (한 개만 남는다).
+
+실시간 시그널 (SIGRTMIN + N) → FIFO 큐; 다건 전송량이 많으면 실시간 시그널 사용을 고려.
+
+3. 커널 내부 플로우 (요지)
+arduino
+Copy
+Edit
+┌─ 클라이언트 유저 ──▶(sigqueue)─┐
+│                                ▼
+│                        커널 모드 (siginfo 생성→서버 pending큐)
+│                                │
+│                     (멀티 CPU면 IPI로 다른 코어 깨움)
+└────────────────────────────────┘
+          ▲              │
+          │   스케줄러 선택│
+          │              ▼
+   서버 태스크 실행 — 커널에 진입(pause, read, IRQ …)
+       ↓           do_signal() 검사
+┌─────────────── ‘안전 복귀 지점’ ───────────────┐
+│ ① 마스크·pending 조건 OK?                    │
+│ ② 유저 스택에 rt_sigframe(ucontext+siginfo)  │
+│ ③ RIP = sa.sa_sigaction                       │
+└──────────────────────────────────────────────┘
+                ▼
+      유저 모드 — 핸들러 실행
+싱글 CPU vs 멀티 CPU
+구분	IPI(인터코어 인터럽트)	컨텍스트 스위치 타이밍
+코어 1개	필요 없음	클라이언트 타임슬라이스가 끝나거나 schedule() 호출될 때
+다중 코어	시그널 대상 태스크가 다른 코어에서 돌고 있으면 커널이 IPI로 즉시 알림	대상 코어가 인터럽트 핸들러 끝내고, 곧바로 do_signal() 경로 진입
+
+4. 서버-측 상태별 전달 시점 (재정리)
+서버가…	언제 커널에 들어가 있나?	핸들러가 세팅되는 순간	지연?
+pause() / select() 등으로 수면	이미 K 모드 (TASK_INTERRUPTIBLE)	시그널 pending 확인 직후, 곧바로 시스템콜 깨움 (EINTR or 자동 재시작)	체감상 즉시
+커널 모드 실행 중
+(예: 막 read() 반환 직전)	지금	이번 return-to-user 직전	거의 즉시
+완전히 유저 모드	아직	다음 시스템콜·페이지폴트·틱 때 커널 진입 후	한 턴 지연
+
+5. SA_RESTART 동작 규칙
+시스템콜 범주	SA_RESTART 켜두면…	대표 예
+블로킹 I/O	커널이 내부적으로 동일 호출을 다시 수행 → 유저 코드는 끊김을 못 느낀다	read, waitpid, nanosleep
+즉시 반환 syscall	영향 없음 (EINTR도 없음)	getpid, time
+중요: select, epoll_wait, pselect 등은 재시작되지 않음 (POSIX 규정)		
+
+6. 안전 수칙 & 디버깅 팁
+핸들러 안에선 async-signal-safe 함수만 → write, _exit, sig_atomic_t 변수 조작 정도.
+
+멀티스레드라면 전용 “시그널 스레드” 또는 pthread_sigmask()로 다른 스레드에서 block.
+
+상태 추적: sigaction(SIGUSR1, NULL, &cur) / cat /proc/$pid/status | grep Sig
+
+gdb 핸들러 중단 → frame 0, print *info, info signals 로 siginfo_t 내용 확인.
+
+실시간 시그널 범위는 런타임에 sysconf(_SC_RTSIG_SIGQ_MAX) / SIGRTMIN, SIGRTMAX 로 점검.
+
+7. 30초 치트시트
+해야 할 일	최소한의 코드/명령
+데이터 포함 시그널 보내기	sigqueue(pid, SIGUSR1, (union sigval){.sival_int = x});
+3-인자 핸들러 등록	`sa.sa_flags = SA_SIGINFO
+핸들러에서 발신자 PID / 값 읽기	info->si_pid, info->si_value.sival_int
+잠자는 스레드 깨우기	서버 루프에 pause() or sigsuspend()
+“잠시만 다른 핸들러”	sigaction(sig,&tmp,&bak); …; sigaction(sig,&bak,0);
+
+이걸 기억하면 끝 ✔︎
+설정은 sigaction + SA_SIGINFO.
+
+전송은 sigqueue (+ 실시간 시그널이면 큐잉).
+
+전달은 “커널→유저 복귀 직전”, 싱글 CPU라면 스케줄러가 한 박자 조율.
+
+oldact 은 백업·조회용, 필요 없으면 NULL.
+
+IPI 는 멀티코어 전용 “다른 코어 깨우기” 하드웨어 인터럽트.
+
+이제 PID 확인, 값 전달, 재진입·재시작 규칙, 내부 타이밍까지 모두 머릿속에 들어갔으니, 42 Minitalk든 실무 서버든 시그널 디버깅이 한결 선명해질 것입니다.
+

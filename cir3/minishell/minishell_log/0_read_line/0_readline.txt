@@ -1,0 +1,350 @@
+readline, history 함수
+
+
+
+https://docs.rtems.org/releases/4.5.1-pre3/toolsdoc/gdb-5.0-docs/readline/readline00030.html?utm_source=chatgpt.com
+일부 발췌
+Readline은 애플리케이션 개발자가 특정 신호를 포착하고 수신 시 해당 신호에 따라 동작할지 여부를 제어할 수 있는 두 가지 변수를 제공합니다. 애플리케이션은 이 변수의 값을 readline ()신호 처리기가 아닌 호출 시에만 변경해야 합니다. 그래야 Readline의 내부 신호 상태가 손상되지 않습니다.
+
+
+
+
+주로 GNU Readline 라이브러리에서 제공
+명령줄에서 입력을 받고, 입력 이력을 관리하는 데 사용됨
+
+관련 헤더,
+#include <readline/readline.h>
+#include <readline/history.h>
+
+다양한 함수들이 존재, 하지만 과제에서 사용가능한 건 
+
+readline
+rl_clear_history 
+rl_on_new_line
+rl_replace_line
+rl_redisplay
+add_history
+
+기본 구조는 basic.c에//
+방법들을 모아놓은 전체 코드들은 rdl_how.c에 있다.
+
+여기서는 gdb 보다는 strace를 이용함 // 
+
+0. 과제 시작
+터미널의 입력 데이터 받는걸 readline을 통해서 구현
+> 대략 아래와 같이 구현됨
+
+while(1)
+{ 
+	rdline = readline("프롬프트") 
+	// rdline 데이터 값을 통해 특정일 처리
+	free(rdline);
+}
+
+1. ctrl+c 시그널 처리를 위한 핸들러 함수
+
+이걸 진행하면서 문제발생 다양한 시도를 함
+
+초기 ctrl+c시그널 핸들러 작성시 아래와 같이 작성
+
+
+void	sig_int_func(int sig_no, siginfo_t *info, void *ctx)
+{
+	write(1, "\n", 1); 	// 개행으로 한줄 뒤로
+	rl_replace_line("", 0);	// 현재 편집 라인을 "" 이걸로 대체
+	rl_on_new_line();		// readline 내부 커서 동기화
+	rl_redisplay();		// 프롬프트 입력줄을 터미널에 다시작성.
+}
+
+
+
+고민. 위 함수들은 시그널 안전 함수인가?.. 아니다.
+그렇다면 시그널 핸들링 함수에서 사용불가
+
+첫번째 방법
+
+시그널 체크용 변수 선언, 후 main에서 처리
+
+아래와 같은 생각으로 진행
+시그널 발생 > 발생했음 체크 > sigint에 의해 readline 끝 > 시그널 변수 확인 후 반복문 재시작
+
+static volatile sig_atomic_t sig_int; // 시그널용 전역 변수 선언
+
+void	sig_int_func(int sig_no, siginfo_t *info, void *ctx)
+{	
+	sig_int = 1;
+}
+
+c
+
+...
+
+read_line = readline("test_readline>");
+if (sig_int)
+{
+	ctrl_c()
+	free(read_line)
+	continue
+}
+
+...
+
+여기서 문제발생 readline 함수가 안끝남...
+처음에는 sig.sa_flags = SA_SIGINFO | SA_RESTART; 이 플래그 때문인줄 알았지만 아님
+
+readline 내부에서 ctrl+c시그널 작동방식
+readline의 경우 내부에서 내가 설정한 시그널을 저장, readline 시그널핸들러 설정을 진행
+> 시그널 발생시 readline 함수 시그널 진행 및 내가 설정한 시그널핸들러 복원 
+> 시그널 핸들링 처리 후 시그널을 다시 발생시킴 > 내가 설정한 시그널 핸들러 실행 
+이 구조로 작동된다. 그럼 왜 SA_RESTART시그널을 적용안하고 했는데도
+readline를 다시시작하는가?
+
+1. nm -C >>> 출력 결과 중 일부 00000000004011e0 t sig_int_func
+2. strace >>> 출력 결과 중 일부
+rt_sigaction(SIGINT, {sa_handler=0x4011e0, sa_mask=[INT], sa_flags=SA_RESTORER|SA_RESTART, sa_restorer=0x75f986e42520}, {sa_handler=SIG_DFL, sa_mask=[], sa_flags=0}, 8) = 0
+
+readline 내부에서 rt_sigaction이 함수를 통해서 시그널 함수 지정함
+sa_handler=0x4011e0(내 시그널 함수주소 맞음) sa_flags=SA_RESTORER|SA_RESTART 플래그를 추가로 지정함.
+
+따라서 sigint로 인해서 readline 멈추지 않는다.
+즉, 시그널 발생 > readline 내부 시그널 함수 실행 > 시그널 재발생 
+	> 내가설정한 시그널 함수 실행 > SA_RESTART 이므로 기존 readline위치로 복귀
+따라서 sigint로 인해서 sig_int = 1은 설정 되지만 readline가 깨지지 않으므로 if (sig_int) 이 코드실행이 안된다.
+
+
+
+두번째 방법
+
+
+터미널 제어 이스케이프 시퀀스
+
+그렇다면 사실상 시그널 핸들러 함수자체에서 수정을 진행할 수 밖에 없을것 같다..
+
+static void sigint_handler(int signo)
+{
+	(void)signo;
+	
+	const char seq[] =
+		"\n"            // 개행
+		"\r"            // 커서 맨 앞으로
+		"\033[2K"       // 커서 라인 지우기
+		"\033[?2004h"   // (옵션) bracketed-paste 모드 켜기
+		"minishell> ";  // 새 프롬프트
+	write(STDOUT_FILENO, seq, sizeof(seq) - 1);
+}
+
+시그널 함수를 위와같이 등록함
+
+전반적으로 나쁘지 않게 작동하나 
+문자열입력, ^C입력 이후에 작동에 문제가 발생한다.
+
+문제점 발생
+
+...
+minishell> 1234567890^C
+mi234567
+minishell> 1234567^C
+minishell> ^C
+minishell> 
+>> 1234567
+minishell> 1234567^C
+minishell67
+...
+
+minishell> 1234567^C 이상태에서 ctrl+D가 안먹힘, 하지만 ctrl+c는 먹힘
+즉, 문자열입력, ^C입력 이후 엔터를 치지 않으면 다른 시그널이 먹통이 되며,
+
+문자열입력, ^C입력 이후 히스토리를 보는 과정에서 터미널의 실제 커서와 readline 내부 커서의 차이때문에 
+글자들이 깨져서 보이는 증상이 나온다.
+
+minishell> sacscsa^C
+minishell> 
+>> sacscsa
+
+문자열 입력후 ^C, 이후에 그냥 엔터입력 할 경우 문자열이 출력된다.
+(rl_replace_line("", 0) 없이 진행하니)
+readline 내부에 문자열이 그대로 있어서 엔터입력시 문자가 출력된다.
+
+혹시 몰라서 main문에
+
+...
+while ((line = readline("minishell> ")) != NULL) {
+	rl_on_new_line();
+	if (*line)
+...
+
+이렇게도 넣어 봤지만 여전히 작동이 이상함
+
+
+세번쨰 방법
+
+rl_signal_event_hook / rl_event_hook
+
+위 변수들은 readline 내부에서 시그널 처리 후 콜백? 훅? 함수를 위한 변수이다.
+따라서 시그널 핸들링 함수가 아니기에 딱히 걱정할 필요가 없다.
+
+1. 먼저 readline 내부에서 자체 내부 훅 함수를 못쓰도록 막는다.
+2. 위의 변수에 직접 내가 작성한 시그널 핸들링 이후 작동할 훅 함수를 넣는다.
+
+static void handle_sigint(int signo)
+{
+    (void)signo;
+    got_sigint = 1;
+}
+
+//3) 훅 함수 
+static int sigint_event_hook(void)
+{
+    if (got_sigint)
+    {
+        write (1, "\n", 1);
+        rl_replace_line("", 0);
+        rl_on_new_line();
+        rl_redisplay();
+        	g_num = 130;
+        	echo $?
+        //got_sigint = 0;  // rl_signal_event_hook, rl_event_hook 차이를 보기위해선 이걸 주석처리후 확인해볼것
+    }
+    return 0;
+}
+
+...
+
+rl_catch_signals = 0;               // readline 내부 훅 끔 
+signal(SIGINT, handle_sigint);      // Ctrl-C → handle_sigint 
+rl_signal_event_hook = sigint_event_hook; // 이건 시그널 받을 때만 시도
+//rl_event_hook = sigint_event_hook; //이건 readline 내부적으로 일정 시간마다 계속 시도함
+
+...
+
+
+작동 방식
+시그널 발생 > readline 내부 시그널 핸들링 함수 실행 > 시그널 재발생 > 내가설정한 시그널 핸들링 함수 실행
+> 원래라면 기존 위치로 복귀 전 내부 훅 함수가 실행되야 하지만 내가 설정한 훅 함수 실행
+> 터미널 초기화 함수(sigint_event_hook)진행 > 기존 위치 복귀
+
+사실 rl_catch_signals = 0; 안해줘도 내가 지정한 훅 함수가 실행된다. 
+// 다만 시그널 핸들러 함수 처리가 전적으로 내가 처리해야한다. (기본적으로 SA_RESTART가 설정되기 때문에 현재 코드는 기존 위치로 복귀)
+// rl_catch_signals = 1; 일 경우 readline 핸들러 함수 적용됨
+
+[[참고]] 
+rl_done의 경우에도 훅을 사용해야한다.
+rl_done도 readline 내부적으로 사용하는 변수이다.
+간단 설명하면 rl_done이 훅처리 이후 readline을 끝낼지 말지 결정하는 플래그다.
+
+대략적인 구현
+
+int sigint_event_hook(void)
+{
+    if (got_sigint)
+        rl_done = 1;
+    return 0;
+}
+
+...
+
+rl_signal_event_hook = sigint_event_hook; // 이건 시그널 받을 때만 시도
+//rl_event_hook = sigint_event_hook; //이건 readline 내부적으로 일정 시간마다 계속 시도함
+//rl_catch_signals = 0;
+
+...
+
+char *line = readline("prompt> ");
+if (got_sigint)
+{
+	printf("readbreak");
+	got_sigint = 0;
+}
+...
+
+>> 실제로 시그널을 보내면 readline함수가 끝나는걸 확인 가능
+
+
+너무 잘 작동한다. 하지만 과제에서 요구한 전역변수 사용조건에 약간의 문제가 발생할 수 있다.
+라이브러리 함수 내부에 존재하는 변수를 직접가져다가 사용해도 되는가?
+가져다가 사용가능하더라도 이걸 전역변수 취급을 해야하는가?
+이제는 과제 조건에서 약간 문제가 걸린다.
+
+
+네번째 방법
+
+close / open
+
+간단하다. readline 내부에 대기중인 read를 강제로 닫아서 끝내버리는거다.
+close는 시그널 안전하니 충분히 사용해도되기 때문이다.
+
+static volatile sig_atomic_t	g_signum = 0;
+
+void	sig_int_func(int sig)
+{
+	g_signum = sig;
+	close(0); //stdin(파일 디스크립터 0)을 /dev/tty로 다시 열기
+}
+
+void	ctrl_c(void)
+{
+	//write(1, "\n", 1);
+	rl_replace_line("", 0);
+	rl_on_new_line();
+
+	// /dev/tty를 다시 열고
+	int fd = open("/dev/tty", O_RDONLY);
+	if (fd != STDIN_FILENO) {
+		if (dup2(fd, STDIN_FILENO) < 0)
+			perror("dup2");
+		close(fd);
+	}
+	g_signum = 0;
+}
+
+...
+
+cmdline = readline(">");
+if (g_signum == SIGINT)
+{
+	ctrl_c();
+}
+
+...
+
+나름 작동을 잘한다. 하지만 항상 처음 ^C 를 받을때 글자가 깨져보인다.
+이것만 문제는 아니다.
+
+일단 
+
+termios 불일치
+
+새로 열린 fd에는 기본 모드가 적용되는데 
+기존 readline 혹은 커서가 기억한 설정과 달라져서 문제발생 가능
+
+open의 문제
+
+다행히 open이 fd를 0을 받으면 다행이지만 만약 받지못한다면?
+dup2를 진행하지만 문제가 발생한다면?
+fd가 꼬이면서 심각한 문제가 발생한다.
+
+이런 문제들 말고도 다양하다..
+위 방식은 그리 추천하지 않는다.
+
+
+이런 방식들을 생각해보고 다른사람들 작성 한 것들을 확인해봤다.
+
+사실상 
+
+void	sig_int_func(int sig_no, siginfo_t *info, void *ctx)
+{
+	write(1, "\n", 1); 	// 개행으로 한줄 뒤로
+	rl_replace_line("", 0);	// 현재 편집 라인을 "" 이걸로 대체
+	rl_on_new_line();		// readline 내부 커서 동기화
+	rl_redisplay();		// 프롬프트 입력줄을 터미널에 다시작성.
+}
+
+그냥 대부분 이렇게 하더라....
+
+이게 문제가 있는 코드인건 너무 확실하고 의심할 여지가 없다.
+
+이걸 해결하기 위해선 readline의 일부를 직접 구현하는 방법 밖에 없을 듯 하다.
+사실상 현재 과제 수준에서는 요구하는 바가 아니라고 생각한다.
+
+minishell의 경우 readline 라이브러리 함수를 그냥 써도 큰 문제는 없을 듯 하다.
+

@@ -1,0 +1,81 @@
+콜백 함수(Callback function)는 어떤 함수의 인자로 전달되어, 그 함수의 실행 도중 호출되는 함수를 말합니다.
+
+✅ 1. 개념 정리
+📌 "콜백"이라는 단어의 뜻
+Call back = "나중에 다시 호출해라"
+
+즉, 원래 함수가 직접 실행하는 게 아니라, 다른 함수에 의해 나중에 호출되는 함수
+
+📌 콜백 함수는 보통 다음처럼 사용됨:
+c
+Copy
+Edit
+void 함수A(void (*callback)(void)) {
+    // ...
+    callback(); // 여기서 전달된 함수를 호출
+}
+✅ 2. 어디에 쓰이나?
+콜백 함수는 다형성, 유연한 코드 구성, 비동기 처리 등에 매우 자주 쓰입니다. 대표적인 예:
+
+분야	예시 함수	설명
+정렬	qsort() in C	비교 함수(콜백)를 넣어줌
+GUI 이벤트	mlx_hook()	마우스 클릭/키보드 입력 시 호출될 함수를 콜백으로 등록
+스레드	pthread_create()	시작할 때 호출할 함수를 인자로 넣음
+신호 처리	sigaction()	시그널 발생 시 호출할 핸들러 함수
+타이머/비동기	JavaScript setTimeout(fn, time)	일정 시간 뒤 fn 호출
+
+✅ 3. 작동 원리 예시 (C 코드로 보기)
+🎯 콜백 함수 전달
+c
+Copy
+Edit
+#include <stdio.h>
+
+void hello() {
+    printf("Hello from callback!\n");
+}
+
+void run_callback(void (*f)()) {
+    printf("Before callback\n");
+    f(); // 전달된 함수를 실행
+    printf("After callback\n");
+}
+
+int main() {
+    run_callback(hello); // hello 함수가 콜백으로 쓰임
+    return 0;
+}
+🔍 실행 흐름
+main()에서 hello 함수를 run_callback()에 전달
+
+run_callback() 내부에서 f() 호출 → 전달된 hello()가 실행됨
+
+✅ 4. 함수 포인터와 콜백
+콜백은 함수 포인터를 이용해서 구현됨.
+
+c
+Copy
+Edit
+void run_callback(void (*f)(int)) {
+    f(42);
+}
+✅ 5. 실전 예시 – qsort (정렬 시 콜백)
+c
+Copy
+Edit
+#include <stdlib.h>
+
+int compare(const void *a, const void *b) {
+    return (*(int *)a - *(int *)b);
+}
+
+int main() {
+    int arr[] = {5, 2, 9, 1};
+    qsort(arr, 4, sizeof(int), compare); // compare 함수가 콜백
+}
+✅ 6. 정리
+요소	설명
+콜백 함수	나중에 호출되기 위해 다른 함수에 전달되는 함수
+구현 방법	함수 포인터로 전달
+주로 쓰이는 곳	정렬, 신호 처리, GUI 이벤트, 비동기처리
+장점	유연함, 재사용성, 모듈화된 설계

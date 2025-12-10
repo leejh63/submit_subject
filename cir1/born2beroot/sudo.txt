@@ -1,0 +1,96 @@
+sudo 명령어 사용법 및 권한 설정 방법
+sudo(superuser do)는 리눅스 시스템에서 일반 사용자가 일시적으로 관리자(root) 권한을 획득하여 특정 명령을 실행할 수 있게 해주는 명령어입니다.
+
+sudo와 su의 기본 개념
+sudo (Superuser DO)
+
+일시적으로 root 권한을 빌려 명령어를 실행
+
+현재 사용자의 비밀번호를 입력하여 인증
+
+실행 후 로그에 기록되어 추적 가능
+
+su (Switch User)
+
+다른 계정으로 완전히 전환하는 명령어
+
+전환하려는 계정(일반적으로 root)의 비밀번호 필요
+
+환경 변수 유지 여부에 따라 su와 su -로 구분
+
+sudo 명령어 기본 사용법
+기본 문법: sudo [옵션] 명령어 [인자...]
+
+주요 옵션:
+
+-u 사용자: 특정 사용자의 권한으로 명령어 실행
+
+-k: 인증 정보 캐시 제거(다음 사용 시 비밀번호 재입력)
+
+-b: 명령어를 백그라운드에서 실행
+
+-s: 현재 디렉토리에서 root 쉘 실행
+
+-i: root 쉘을 실행하며 root의 홈 디렉토리(/root)로 이동
+
+사용 예시:
+
+sudo apt install package_name  # 패키지 설치
+sudo nano /etc/hosts           # 설정 파일 편집
+sudo systemctl restart service # 서비스 재시작
+사용자에게 sudo 권한 부여 방법
+1. sudo 그룹에 사용자 추가하기
+Debian 기반 배포판(Ubuntu 등)에서 가장 간단한 방법:
+
+usermod -aG sudo 사용자이름
+권한이 있는지 확인:
+
+sudo whoami  # "root" 출력 시 정상적으로 권한 부여됨
+2. /etc/sudoers 파일 수정하기
+visudo 명령어 사용하기(권장):
+
+su  # root로 전환
+visudo  # 안전하게 sudoers 파일 편집
+직접 파일 수정하기(권장하지 않음):
+
+chmod +w /etc/sudoers  # 쓰기 권한 부여
+vi /etc/sudoers        # 파일 편집
+chmod -w /etc/sudoers  # 작업 후 쓰기 권한 제거 필수
+3. 권한 설정 예시
+특정 사용자에게 모든 명령어 실행 권한 부여:
+
+사용자이름 ALL=(ALL) ALL
+그룹에 sudo 권한 부여:
+
+%그룹이름 ALL=(ALL) ALL
+비밀번호 없이 sudo 사용 권한 부여:
+
+사용자이름 ALL=(ALL) NOPASSWD: ALL
+%그룹이름 ALL=(ALL) NOPASSWD: ALL
+특정 명령어만 실행 허용:
+
+사용자이름 ALL=(ALL) NOPASSWD:/bin/mkdir,/bin/rmdir
+4. 개별 설정 파일 사용하기
+/etc/sudoers.d/ 디렉토리에 설정 파일을 추가하는 방법:
+
+echo "사용자이름 ALL=(ALL) ALL" | sudo tee /etc/sudoers.d/사용자이름
+
+%ALL    ALL=(  ALL  :   ALL     )    ALL
+누가    어디서=(누구로서:어떤그룹으로서)    무엇을
+
+실제 사용 예시
+기본 형태: %admin ALL=(ALL:ALL) ALL
+
+admin 그룹 사용자는 모든 명령어를 모든 사용자와 그룹 권한으로 실행 가능
+
+제한된 사용자로만 실행: %webadmin ALL=(www-data:www-data) ALL
+
+webadmin 그룹은 www-data 사용자와 그룹 권한으로만 명령어 실행 가능
+
+특정 명령어만 허용: %developers ALL=(ALL:ALL) /usr/bin/apt
+
+developers 그룹은 apt 명령어만 모든 사용자/그룹 권한으로 실행 가능
+
+비밀번호 없이 실행: %operators ALL=(ALL:ALL) NOPASSWD: /bin/systemctl
+
+operators 그룹은 systemctl 명령을 비밀번호 없이 모든 사용자/그룹으로 실행 가능

@@ -1,0 +1,24 @@
+/* ************************************************************************** */
+/*                                                                            */
+/*                                                        :::      ::::::::   */
+/*   ft_print_hex.c                                     :+:      :+:    :+:   */
+/*                                                    +:+ +:+         +:+     */
+/*   By: Jaeholee <makest@naver.com>                +#+  +:+       +#+        */
+/*                                                +#+#+#+#+#+   +#+           */
+/*   Created: 2025/04/10 11:31:09 by Jaeholee          #+#    #+#             */
+/*   Updated: 2025/04/10 11:31:16 by Jaeholee         ###   ########.fr       */
+/*                                                                            */
+/* ************************************************************************** */
+
+#include "ft_printf.h"
+
+int	ft_print_hex(va_list *args)
+{
+	unsigned long long	n;
+	int					i;
+
+	n = va_arg(*args, unsigned int);
+	i = 0;
+	ft_pbase(n, &i, 16, 0);
+	return (i);
+}

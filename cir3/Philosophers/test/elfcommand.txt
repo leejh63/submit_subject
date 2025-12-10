@@ -1,0 +1,241 @@
+좋습니다. 이건 readelf -l 명령어의 출력 결과로, **ELF 실행 파일(Executable and Linkable Format)**의 Program Header Table을 분석한 것입니다.
+ELF는 리눅스에서 실행 파일, 오브젝트 파일, 공유 라이브러리 등에 사용되는 표준 이진 포맷입니다.
+
+✅ 1. readelf -l 명령어란?
+sh
+Copy
+Edit
+readelf -l ./파일명
+ELF 파일의 Program Header Table을 출력합니다.
+이 테이블은 실행 시 운영체제가 어떤 섹션을 어떻게 메모리에 매핑할지를 정의합니다.
+
+✅ 2. Program Header Table vs Section Header Table
+항목	Program Header Table (-l)	Section Header Table (-S)
+목적	실행에 필요한 정보 제공 (OS에 사용됨)	링커/디버거용 정보
+포함 정보	어떤 섹션을 메모리에 어떻게 로드할지	심볼, 디버그, 소스 매핑 등
+주로 사용	로더, OS	링커, 디버거
+
+✅ 3. 출력 구조 설명
+📌 상단: 요약
+text
+Copy
+Edit
+Elf file type is EXEC         → 실행 가능한 ELF 파일
+Entry point 0x401060          → 프로그램 시작 주소 (main 이전)
+There are 13 program headers  → 총 13개의 프로그램 헤더 존재
+✅ 4. 각 Program Header 분석
+각 행은 **실행 시 메모리에 로드되는 단위(세그먼트)**입니다.
+
+🧩 필드 설명
+필드	설명
+Type	이 프로그램 헤더의 종류
+Offset	파일 내 오프셋 (바이너리 상의 위치)
+VirtAddr	메모리에서 매핑될 가상 주소
+PhysAddr	실제 물리 주소 (대부분 무시됨)
+FileSiz	파일에서 차지하는 크기
+MemSiz	메모리에서 차지할 크기
+Flags	접근 권한 (R = Read, W = Write, E = Execute)
+Align	정렬 (페이지 단위, 보통 0x1000 = 4KB)
+
+✅ 5. 주요 프로그램 헤더 해석
+▶ PHDR
+Type: PHDR
+
+설명: 다른 Program Header가 어디에 있는지를 알려주는 메타 정보
+
+실행 시 커널이 이 헤더를 기준으로 다른 헤더를 파싱
+
+▶ INTERP
+Type: INTERP
+
+설명: 이 ELF가 동적 실행일 경우 사용할 로더의 경로
+
+여기선 /lib64/ld-linux-x86-64.so.2 → ld.so
+
+▶ LOAD
+Type: LOAD
+
+설명: 실제로 메모리에 로드되는 영역
+
+총 4개 존재 → 각각의 역할은:
+
+인덱스	설명	Flags	포함 섹션
+0	ELF header, 초기 정보	R	.interp 등
+1	실행 코드 (텍스트)	R + E	.text, .init
+2	읽기 전용 데이터	R	.rodata, .eh_frame
+3	초기화 배열, 동적 영역, 데이터	R + W	.data, .bss 등
+
+▶ DYNAMIC
+Type: DYNAMIC
+
+설명: 이 ELF는 동적 링크 실행 파일임을 의미
+이 섹션에는 .dynamic, .got, .plt 등 링크 정보가 포함됨
+
+▶ GNU_STACK
+설명: 스택에 실행 권한이 있는지 여부를 명시
+여기선 RW (읽기/쓰기 가능, 실행 불가)
+
+✔ 보안 강화를 위해 스택은 보통 non-executable로 설정
+
+▶ GNU_RELRO
+설명: 런타임 직후 읽기 전용이 되는 영역
+
+예: .got, .dynamic 같은 구조를 보호하기 위해 사용됨
+
+✅ 6. Section to Segment Mapping
+text
+Copy
+Edit
+Section to Segment mapping:
+ Segment Sections...
+  00     
+  01     .interp 
+  02     .interp .note.gnu.property .note.gnu.build-id ...
+  03     .init .plt .text .fini 
+  04     .rodata .eh_frame_hdr .eh_frame 
+  ...
+이 부분은 어떤 **ELF 섹션(section)**이 어느 **세그먼트(segment)**에 포함되는지를 보여줍니다
+
+예:
+
+.text는 LOAD(03) 세그먼트에 포함됨 → 실행 가능
+
+.data, .bss는 LOAD(05) 세그먼트에 포함 → 쓰기 가능
+
+✅ 총정리: 당신이 봤던 출력은 뭐냐?
+항목	의미
+총 13개의 Program Header	실행 시 사용될 세그먼트 정의
+INTERP	동적 링커로 /lib64/ld-linux-x86-64.so.2 사용
+LOAD	코드, 데이터, bss 등이 메모리로 로딩될 정보
+DYNAMIC	공유 라이브러리 사용 (동적 링킹)
+GNU_STACK	스택에 실행 권한 없음
+Entry point	0x401060 → 실행 시 가장 먼저 jump되는 가상 주소 (보통 _start)
+
+🧪 추가로 볼 수 있는 명령어들
+섹션 헤더 보기: readelf -S ./t
+
+심볼 테이블 보기: readelf -s ./t
+
+디스어셈블: objdump -d ./t
+
+실제 동작: strace ./t, ltrace ./t
+
+
+좋습니다! 이건 readelf -s ./t로 **ELF 심볼 테이블(Symbol Table)**을 출력한 결과입니다.
+ELF 파일은 실행 시 사용할 변수/함수/주소 등의 이름과 주소 정보를 심볼로 저장합니다.
+그걸 이 명령어로 확인하는 것이고, 심볼 테이블은 링커, 디버거, 로더 모두에게 중요한 정보입니다.
+
+✅ 출력 구성 이해하기
+기본 구조:
+text
+Copy
+Edit
+Num:    Value          Size  Type   Bind   Vis     Ndx  Name
+항목	의미
+Num	심볼 번호 (목록 index)
+Value	심볼의 가상 주소 (실행 시 위치)
+Size	심볼이 차지하는 바이트 수
+Type	FUNC, OBJECT, NOTYPE, FILE, 등
+Bind	GLOBAL, LOCAL, WEAK (링커/로더에게 우선순위 알려줌)
+Vis	심볼의 가시성: DEFAULT, HIDDEN
+Ndx	심볼이 속한 섹션 인덱스 (UND는 외부 라이브러리 의미)
+Name	함수명, 전역 변수명 등
+
+✅ 주요 테이블 구분
+📁 .dynsym (Dynamic Symbol Table)
+동적 링커(런타임)용 심볼 테이블
+
+공유 라이브러리와 상호작용하는 함수만 포함
+
+예: printf@GLIBC_2.2.5, pthread_create@GLIBC_2.34 등
+
+📁 .symtab (Static Symbol Table)
+전체 심볼 포함: 내부 함수, 전역 변수, 라이브러리 참조 등
+
+컴파일러와 링커, 디버거가 주로 참조
+
+✅ 주요 심볼 해석 예시
+🔹 main
+sql
+Copy
+Edit
+32: 0000000000401180   114 FUNC    GLOBAL DEFAULT   15 main
+Value = 0x401180 → 실행 시 가상 주소
+
+Size = 114 bytes → 이 함수의 크기
+
+Type = FUNC → 함수임
+
+Bind = GLOBAL → 다른 객체에서도 참조 가능
+
+Ndx = 15 → .text 섹션
+
+🔹 _start
+sql
+Copy
+Edit
+30: 0000000000401060    38 FUNC    GLOBAL DEFAULT   15 _start
+ELF의 진입점 (main 이전)
+
+crt1.o에서 제공됨, 실제로 __libc_start_main() 호출함
+main()을 호출하는 진짜 시작 함수
+
+🔹 __libc_start_main, printf, pthread_create
+makefile
+Copy
+Edit
+18: ... UND __libc_start_main
+23: ... UND printf@GLIBC_2.2.5
+33: ... UND pthread_create@GLIBC_2.34
+UND: 정의되지 않은 심볼 (외부에서 가져옴)
+
+실행 시 **동적 링커(ld-linux)**가 libc.so.6 또는 libpthread.so.0에서 가져옴
+
+🔹 loop_forever
+sql
+Copy
+Edit
+20: 0000000000401150    46 FUNC    GLOBAL DEFAULT   15 loop_forever
+사용자 정의 함수로 보임
+
+주소 0x401150, 크기 46 byte, 전역 접근 가능
+
+🔹 __do_global_dtors_aux, __frame_dummy, _GLOBAL_OFFSET_TABLE_, _DYNAMIC
+내부적인 C 런타임 초기화/해제 관련 함수 및 전역 변수
+
+예: 전역 객체의 소멸자 호출, 동적 연결용 GOT 테이블 등
+
+대부분은 컴파일 시 자동 생성됨 (crtstuff.c, libgcc, libc 등)
+
+🔹 __gmon_start__, __TMC_END__, __bss_start, _edata, _end
+심볼	설명
+__gmon_start__	gprof (프로파일러) 사용 시 연결
+_edata, _end, __bss_start	.bss 세그먼트의 시작/끝. 초기화 안된 전역 변수 공간
+__TMC_END__	C++ 전역 객체 초기화용 심볼
+
+✅ 특별히 유용한 패턴들
+심볼명	의미
+_start()	ELF 실행 시작 지점
+main()	사용자 작성 진입점
+printf, pthread_create, etc.	외부 심볼, 런타임에 동적 링크됨
+UND	undefined → 외부 함수 or 라이브러리에서 가져옴
+.symtab에만 있고 .dynsym에 없는 함수	정적 함수 or 외부에 노출 안 함
+
+📦 종합 정리
+심볼	의미
+.symtab	모든 함수/변수/파일명 정보 (디버깅/링킹용)
+.dynsym	실행 시 참조할 외부 심볼만 담김
+main, loop_forever	당신이 작성한 사용자 함수들
+UND	외부 라이브러리에서 동적 링크될 심볼
+_start	ELF가 진입하는 entry point (main 아님!)
+
+필요하다면 objdump, nm, ldd, strace 등을 사용해서
+이 심볼들이 실제로 어떻게 동작하는지 추적할 수도 있습니다.
+
+더 깊이 보고 싶은 항목 있나요?
+
+main → _start 흐름?
+
+dynamic symbol이 로드되는 시점?
+
+static build vs dynamic build 비교?

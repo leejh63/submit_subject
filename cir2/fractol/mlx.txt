@@ -1,0 +1,378 @@
+mlx 라이브러리 콜백 함수 인자 형태 총정리
+아래 표는 MiniLibX(mlx) 라이브러리에서 이벤트를 처리할 때 사용하는 주요 hook 함수와, 각 콜백 함수가 받는 인자 형태를 한눈에 정리한 것입니다. 모든 주요 이벤트와 함수의 인자 구조를 빠짐없이 포함했습니다.
+
+Hook 함수명	콜백 함수 형태	주요 인자 설명
+mlx_key_hook	int key_hook(int keycode, void *param)	keycode: 눌린 키의 코드
+param: 사용자 포인터
+mlx_mouse_hook	int mouse_hook(int button, int x, int y, void *param)	button: 마우스 버튼 번호
+x, y: 클릭 좌표
+param: 사용자 포인터
+mlx_expose_hook	int expose_hook(void *param)	param: 사용자 포인터
+mlx_loop_hook	int loop_hook(void *param)	param: 사용자 포인터
+mlx_hook	이벤트에 따라 다름 (아래 참고)	x_event, x_mask에 따라 인자 구조가 달라짐
+상세 설명
+mlx_key_hook
+
+키보드 입력 이벤트를 처리
+
+콜백 함수는 반드시 (int keycode, void *param) 형태여야 함.
+
+mlx_mouse_hook
+
+마우스 클릭 이벤트를 처리
+
+콜백 함수는 반드시 (int button, int x, int y, void *param) 형태여야 함.
+
+mlx_expose_hook
+
+창이 새로 그려질 때(노출 이벤트) 호출
+
+콜백 함수는 반드시 (void *param) 형태여야 함.
+
+mlx_loop_hook
+
+이벤트가 없어도 루프마다 호출
+
+콜백 함수는 반드시 (void *param) 형태여야 함.
+
+mlx_hook
+
+X11의 다양한 이벤트를 처리할 수 있는 범용 함수
+
+x_event에 따라 콜백 함수의 인자 형태가 다름
+
+예시: 키보드 이벤트면 (int keycode, void *param), 마우스 이벤트면 (int button, int x, int y, void *param) 등.
+
+참고 사항
+모든 hook 함수는 마지막 인자로 void *param을 받아, 원하는 구조체나 데이터를 콜백에서 사용할 수 있도록 함.
+
+콜백 함수의 인자 개수와 타입은 반드시 해당 hook 함수의 요구사항에 맞춰야 하며, 다를 경우 컴파일러 경고 또는 런타임 오류가 발생할 수 있음.
+
+mlx_hook 함수는 X11 이벤트 번호와 마스크에 따라 다양한 형태의 콜백을 지원하지만, 대표적으로는 위와 같은 인자 구조를 사용함.
+
+요약
+콜백 함수 인자는 이벤트별로 완전히 고정되어 있다.
+
+*모든 hook 함수의 마지막 인자는 void param으로, 사용자 데이터 전달에 사용된다.
+
+인자 형태를 임의로 바꾸면 동작하지 않는다.
+
+이 표와 설명을 참고하면, mlx에서 사용할 수 있는 모든 콜백 함수의 인자 구조를 한눈에 파악할 수 있습니
+
+
+✅ 요약 정리
+단계	구성 요소	설명
+초기화	mlx_init()	X 서버와 연결
+윈도우 생성	mlx_new_window()	창 만들기
+이미지 생성	mlx_new_image()	메모리 버퍼 생성
+색상 조작	mlx_get_data_addr()	직접 픽셀 버퍼에 쓰기
+화면 출력	mlx_put_image_to_window()	이미지 버퍼를 창에 표시
+이벤트 등록	mlx_key_hook() 등	콜백 함수 연결
+이벤트 처리	mlx_loop()	무한 루프에서 이벤트 감지
+
+
+1. void *mlx_init(void);
+설명: MinilibX 사용을 위한 초기화 함수. X 서버와 연결.
+
+반환값: 성공 시 핸들러 포인터, 실패 시 NULL.
+
+사용 예시:
+
+c
+void *mlx_ptr = mlx_init();
+2. void *mlx_new_window(void *mlx_ptr, int size_x, int size_y, char *title);
+설명: 새 윈도우(창)를 생성.
+
+반환값: 성공 시 윈도우 핸들러, 실패 시 NULL.
+
+사용 예시:
+
+c
+void *win_ptr = mlx_new_window(mlx_ptr, 800, 600, "My Window");
+3. int mlx_clear_window(void *mlx_ptr, void *win_ptr);
+설명: 윈도우의 화면을 모두 지움.
+
+반환값: 성공 시 0, 실패 시 음수.
+
+사용 예시:
+
+c
+mlx_clear_window(mlx_ptr, win_ptr);
+4. int mlx_pixel_put(void *mlx_ptr, void *win_ptr, int x, int y, int color);
+설명: 윈도우의 (x, y) 위치에 지정한 색상으로 픽셀을 그림.
+
+반환값: 성공 시 0, 실패 시 음수.
+
+사용 예시:
+
+c
+mlx_pixel_put(mlx_ptr, win_ptr, 100, 100, 0x00FF0000); // 빨간 점
+5. void *mlx_new_image(void *mlx_ptr, int width, int height);
+설명: 새로운 이미지(메모리 버퍼) 생성.
+
+반환값: 이미지 핸들러, 실패 시 NULL.
+
+사용 예시:
+
+c
+void *img_ptr = mlx_new_image(mlx_ptr, 800, 600);
+6. char *mlx_get_data_addr(void *img_ptr, int *bits_per_pixel, int *size_line, int *endian);
+설명: 이미지 버퍼의 주소와 정보(비트수, 한 줄 크기, 엔디안)를 얻음.
+
+반환값: 이미지 데이터 포인터.
+
+사용 예시:
+
+c
+int bpp, size_line, endian;
+char *data = mlx_get_data_addr(img_ptr, &bpp, &size_line, &endian);
+7. int mlx_put_image_to_window(void *mlx_ptr, void *win_ptr, void *img_ptr, int x, int y);
+설명: 이미지 버퍼를 윈도우의 (x, y) 위치에 출력.
+
+반환값: 성공 시 0, 실패 시 음수.
+
+사용 예시:
+
+c
+mlx_put_image_to_window(mlx_ptr, win_ptr, img_ptr, 0, 0);
+8. int mlx_get_color_value(void *mlx_ptr, int color);
+설명: 색상 값을 X 서버에 맞는 값으로 변환.
+
+반환값: 변환된 색상 값.
+
+사용 예시:
+
+c
+int real_color = mlx_get_color_value(mlx_ptr, 0x00FF0000);
+9. int mlx_mouse_hook(void *win_ptr, int (*funct_ptr)(), void *param);
+설명: 마우스 이벤트 발생 시 호출될 콜백 함수 등록.
+
+반환값: 성공 시 0, 실패 시 음수.
+
+사용 예시:
+
+c
+mlx_mouse_hook(win_ptr, mouse_handler, NULL);
+10. int mlx_key_hook(void *win_ptr, int (*funct_ptr)(), void *param);
+설명: 키보드 이벤트 발생 시 호출될 콜백 함수 등록.
+
+반환값: 성공 시 0, 실패 시 음수.
+
+사용 예시:
+
+c
+mlx_key_hook(win_ptr, key_handler, NULL);
+11. int mlx_expose_hook(void *win_ptr, int (*funct_ptr)(), void *param);
+설명: 윈도우가 다시 그려질 때 호출될 콜백 함수 등록.
+
+반환값: 성공 시 0, 실패 시 음수.
+
+사용 예시:
+
+c
+mlx_expose_hook(win_ptr, expose_handler, NULL);
+12. int mlx_loop_hook(void *mlx_ptr, int (*funct_ptr)(), void *param);
+설명: 메인 이벤트 루프에서 매 프레임마다 호출될 함수 등록.
+
+반환값: 성공 시 0, 실패 시 음수.
+
+사용 예시:
+
+c
+mlx_loop_hook(mlx_ptr, loop_handler, NULL);
+13. int mlx_loop(void *mlx_ptr);
+설명: 이벤트 감지 및 처리하는 메인 루프 진입.
+
+반환값: 루프 종료 시 0.
+
+사용 예시:
+
+c
+mlx_loop(mlx_ptr);
+14. int mlx_loop_end(void *mlx_ptr);
+설명: 이벤트 루프를 종료.
+
+반환값: 성공 시 0, 실패 시 음수.
+
+사용 예시:
+
+c
+mlx_loop_end(mlx_ptr);
+15. int mlx_string_put(void *mlx_ptr, void *win_ptr, int x, int y, int color, char *string);
+설명: 윈도우의 (x, y) 위치에 문자열을 출력.
+
+반환값: 성공 시 0, 실패 시 음수.
+
+사용 예시:
+
+c
+mlx_string_put(mlx_ptr, win_ptr, 50, 50, 0x00FFFFFF, "Hello!");
+16. void mlx_set_font(void *mlx_ptr, void *win_ptr, char *name);
+설명: 윈도우의 폰트 설정.
+
+사용 예시:
+
+c
+mlx_set_font(mlx_ptr, win_ptr, "fixed");
+17. void *mlx_xpm_to_image(void *mlx_ptr, char **xpm_data, int *width, int *height);
+설명: XPM 데이터로부터 이미지 객체 생성.
+
+반환값: 이미지 핸들러, 실패 시 NULL.
+
+사용 예시:
+
+c
+void *img = mlx_xpm_to_image(mlx_ptr, xpm_data, &w, &h);
+18. void *mlx_xpm_file_to_image(void *mlx_ptr, char *filename, int *width, int *height);
+설명: XPM 파일로부터 이미지 객체 생성.
+
+반환값: 이미지 핸들러, 실패 시 NULL.
+
+사용 예시:
+
+c
+void *img = mlx_xpm_file_to_image(mlx_ptr, "img.xpm", &w, &h);
+19. int mlx_destroy_window(void *mlx_ptr, void *win_ptr);
+설명: 윈도우(창) 제거.
+
+반환값: 성공 시 0, 실패 시 음수.
+
+사용 예시:
+
+c
+mlx_destroy_window(mlx_ptr, win_ptr);
+20. int mlx_destroy_image(void *mlx_ptr, void *img_ptr);
+설명: 이미지(버퍼) 제거.
+
+반환값: 성공 시 0, 실패 시 음수.
+
+사용 예시:
+
+c
+mlx_destroy_image(mlx_ptr, img_ptr);
+21. int mlx_destroy_display(void *mlx_ptr);
+설명: X 디스플레이 연결 해제.
+
+반환값: 성공 시 0, 실패 시 음수.
+
+사용 예시:
+
+c
+mlx_destroy_display(mlx_ptr);
+22. int mlx_hook(void *win_ptr, int x_event, int x_mask, int (*funct)(), void *param);
+설명: X 이벤트에 대한 콜백 함수 등록(일반화된 이벤트 훅).
+
+반환값: 성공 시 0, 실패 시 음수.
+
+사용 예시:
+
+c
+mlx_hook(win_ptr, event, mask, handler, param);
+23. int mlx_do_key_autorepeatoff(void *mlx_ptr);
+설명: 키 자동 반복 기능 끄기.
+
+반환값: 성공 시 0, 실패 시 음수.
+
+사용 예시:
+
+c
+mlx_do_key_autorepeatoff(mlx_ptr);
+24. int mlx_do_key_autorepeaton(void *mlx_ptr);
+설명: 키 자동 반복 기능 켜기.
+
+반환값: 성공 시 0, 실패 시 음수.
+
+사용 예시:
+
+c
+mlx_do_key_autorepeaton(mlx_ptr);
+25. int mlx_do_sync(void *mlx_ptr);
+설명: X 서버와 동기화.
+
+반환값: 성공 시 0, 실패 시 음수.
+
+사용 예시:
+
+c
+mlx_do_sync(mlx_ptr);
+26. int mlx_mouse_get_pos(void *mlx_ptr, void *win_ptr, int *x, int *y);
+설명: 마우스의 현재 위치를 얻음.
+
+반환값: 성공 시 0, 실패 시 음수.
+
+사용 예시:
+
+c
+int x, y;
+mlx_mouse_get_pos(mlx_ptr, win_ptr, &x, &y);
+27. int mlx_mouse_move(void *mlx_ptr, void *win_ptr, int x, int y);
+설명: 마우스 커서를 (x, y) 위치로 이동.
+
+반환값: 성공 시 0, 실패 시 음수.
+
+사용 예시:
+
+c
+mlx_mouse_move(mlx_ptr, win_ptr, 100, 100);
+28. int mlx_mouse_hide(void *mlx_ptr, void *win_ptr);
+설명: 마우스 커서 숨기기.
+
+반환값: 성공 시 0, 실패 시 음수.
+
+사용 예시:
+
+c
+mlx_mouse_hide(mlx_ptr, win_ptr);
+29. int mlx_mouse_show(void *mlx_ptr, void *win_ptr);
+설명: 마우스 커서 보이기.
+
+반환값: 성공 시 0, 실패 시 음수.
+
+사용 예시:
+
+c
+mlx_mouse_show(mlx_ptr, win_ptr);
+30. int mlx_get_screen_size(void *mlx_ptr, int *sizex, int *sizey);
+설명: 화면(모니터) 크기 얻기.
+
+반환값: 성공 시 0, 실패 시 음수.
+
+사용 예시:
+
+c
+int w, h;
+mlx_get_screen_size(mlx_ptr, &w, &h);
+
+
+
+단계	구성 요소 함수명	설명
+초기화	mlx_init()	X 서버와 연결, MinilibX 사용 준비   
+윈도우 생성	mlx_new_window()	창(윈도우) 생성
+이미지 생성	mlx_new_image()	이미지(메모리 버퍼) 생성
+이미지 정보	mlx_get_data_addr()	이미지 버퍼 주소 및 픽셀 정보 획득
+XPM 이미지 생성	mlx_xpm_file_to_image()	XPM 파일로부터 이미지 생성
+XPM 데이터 생성	mlx_xpm_to_image()	XPM 데이터로부터 이미지 생성
+색상 변환	mlx_get_color_value()	색상 값을 X 서버에 맞게 변환
+픽셀 출력	mlx_pixel_put()	윈도우에 한 픽셀 출력
+이미지 출력	mlx_put_image_to_window()	이미지 버퍼를 윈도우에 출력
+문자열 출력	mlx_string_put()	윈도우에 문자열 출력
+폰트 설정	mlx_set_font()	윈도우의 폰트 설정
+윈도우 초기화	mlx_clear_window()	윈도우 화면을 지움
+윈도우 삭제	mlx_destroy_window()	윈도우(창) 삭제
+이미지 삭제	mlx_destroy_image()	이미지(버퍼) 삭제
+디스플레이 삭제	mlx_destroy_display()	X 디스플레이 연결 해제
+이벤트 등록	mlx_key_hook()	키보드 이벤트 콜백 등록
+이벤트 등록	mlx_mouse_hook()	마우스 이벤트 콜백 등록
+이벤트 등록	mlx_expose_hook()	윈도우 노출(Expose) 이벤트 콜백 등록
+이벤트 등록	mlx_hook()	일반 이벤트 콜백 등록
+루프 훅 등록	mlx_loop_hook()	루프에서 매 프레임마다 콜백 등록
+이벤트 처리	mlx_loop()	무한 루프에서 이벤트 감지 및 처리
+루프 종료	mlx_loop_end()	이벤트 루프 종료
+키 반복 OFF	mlx_do_key_autorepeatoff()	키 자동 반복 끄기
+키 반복 ON	mlx_do_key_autorepeaton()	키 자동 반복 켜기
+동기화	mlx_do_sync()	X 서버와 동기화
+마우스 위치	mlx_mouse_get_pos()	마우스 위치 얻기
+마우스 이동	mlx_mouse_move()	마우스 커서 이동
+마우스 숨김	mlx_mouse_hide()	마우스 커서 숨기기
+마우스 표시	mlx_mouse_show()	마우스 커서 보이기
+화면 크기	mlx_get_screen_size()	화면(모니터) 크기 얻기

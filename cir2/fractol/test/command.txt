@@ -1,0 +1,18 @@
+
+clear && 
+
+cc -Iminilibx-linux -Lminilibx-linux main2.c -lmlx_Linux -lXext -lX11 -lm -o fractol 
+
+cc -Iminilibx-linux -Lminilibx-linux main.c -lmlx_Linux -lXext -lX11 -lm -o fractol 
+
+&& ./fractol
+
+
+
+cc -Iminilibx-linux -Lminilibx-linux test_pixel.c -lmlx_Linux -lmlx -lXext -lX11 -lm -o put
+
+cc -Iminilibx-linux -Lminilibx-linux test_data.c -lmlx_Linux -lmlx -lXext -lX11 -lm -o data
+
+cc -Iminilibx-linux -Lminilibx-linux event.c -lmlx_Linux -lmlx -lXext -lX11 -lm -o event
+
+cc -Iminilibx-linux -Lminilibx-linux triangle_gpt.c -lmlx_Linux -lmlx -lXext -lX11 -lm -o t

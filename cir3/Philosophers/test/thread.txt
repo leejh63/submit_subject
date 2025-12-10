@@ -1,0 +1,461 @@
+목적	명령어	설명
+전체 프로세스 목록 확인	ps -eLf 또는 ps -T -p <PID>	특정 프로세스의 모든 스레드 확인
+특정 프로세스의 TID 확인	ls /proc/<PID>/task/	프로세스의 모든 스레드(TID) 출력
+각 TID의 stack 영역 보기	grep stack /proc/<PID>/task/<TID>/maps	각 스레드가 사용하는 [stack] 주소 확인
+모든 스레드 스택 확인	for tid in $(ls /proc/<PID>/task/); do echo "TID $tid:"; grep stack /proc/<PID>/task/$tid/maps; done	스레드별 스택 맵을 일괄 확인
+스레드별 현재 실행 스택 출력	cat /proc/<PID>/task/<TID>/stack	현재 콜스택(어셈블리 수준 프레임) 표시
+전체 메모리 맵 확인	cat /proc/<PID>/maps	전체 가상 메모리 영역 확인 (heap, libc, stack 등)
+특정 TID의 메모리 맵 확인	cat /proc/<PID>/task/<TID>/maps	일반적으로 /proc/<PID>/maps와 동일
+각 스레드의 status 확인	cat /proc/<PID>/task/<TID>/status	각 스레드의 상태, 메모리 사용량 등 자세한 정보
+현재 스레드 갯수 확인	grep Threads /proc/<PID>/status	현재 해당 프로세스의 스레드 수 표시
+메인 스레드 추정	grep Tgid /proc/<PID>/task/<TID>/status	Tgid == TID 이면 해당 TID가 메인 스레드
+
+
+/proc/[PID]/ 디렉토리 구조 정리
+경로	설명
+cmdline	실행 시 사용한 전체 명령줄 인자. null(0x00)로 구분됨
+comm	실행 파일 이름 (basename)
+cwd	현재 작업 디렉토리 (symbolic link)
+exe	실행 중인 바이너리의 경로 (symbolic link)
+environ	환경 변수 목록 (null으로 구분)
+fd/	열려있는 파일 디스크립터들. 번호별로 symlink 되어 있음
+fdinfo/	각 파일 디스크립터의 자세한 정보
+maps	해당 프로세스의 메모리 맵 구조 (코드, 힙, 스택 등 주소 범위, 권한 등)
+mem	프로세스의 전체 메모리 내용 (디버깅용으로 사용 가능)
+mounts	마운트된 파일시스템 정보
+net/	이 프로세스의 네트워크 관련 정보 (소켓 등)
+status	상태 요약 정보 (PID, PPID, UID, GID, 메모리 사용, 스레드 수 등)
+stat	프로세스 통계 정보 (CPU 사용량, 시간, 상태 등)
+statm	메모리 상태 요약 (pages 단위, RSS, 공유 등)
+task/	이 프로세스의 스레드 목록 (각각의 TID 디렉토리 포함)
+stack	메인 스레드의 콜스택 실행 위치 (cat으로 확인 가능)
+sched	스케줄러 관련 상세 정보
+schedstat	스케줄링 통계 (실행 시간, 대기 시간 등)
+smaps	maps의 확장판. 각 메모리 영역별 상세 메모리 사용량 (RSS, PSS 등)
+smaps_rollup	smaps 전체 합계 요약
+oom_score	OOM Killer 우선순위 점수
+oom_adj / oom_score_adj	OOM Killer에 대한 수동 조정 값
+limits	이 프로세스의 리소스 제한 정보 (ulimit 등)
+loginuid	로그인한 유저 ID
+personality	실행 환경 설정 (ABI 호환성 등)
+attr/	SELinux 관련 보안 속성
+auxv	ELF 보조 벡터 (프로세스 시작 시 커널이 전달한 정보)
+clear_refs	메모리 페이지 통계 초기화용 (디버깅/트래킹)
+mountstats	마운트된 FS의 상세 통계
+pagemap	가상 주소와 물리 페이지 매핑 정보 (PFN 추적용)
+cgroup	프로세스가 속한 컨트롤 그룹(cgroup)
+ns/	이 프로세스가 속한 각종 namespace 정보 (PID, mount, network 등)
+wchan	현재 커널에서 블록된 함수명 (waiting channel)
+syscall	현재 실행 중인 시스템 콜 번호와 인자
+
+✅ task/ 내부 구조
+task/ 폴더 안에는 프로세스의 모든 스레드가 TID(=Thread ID) 디렉토리로 존재
+
+각 /proc/[PID]/task/[TID]/ 는 마치 또 하나의 /proc/[PID]/ 와 동일 구조를 가짐
+
+각 스레드별 status, stack, maps 등을 따로 확인 가능
+
+✅ 사용 예시
+bash
+Copy
+Edit
+# PID가 12345인 프로세스의 실행파일 경로 확인
+$ readlink /proc/12345/exe
+
+# 해당 프로세스의 열려있는 파일 확인
+$ ls -l /proc/12345/fd
+
+# 메모리 맵 구조 확인
+$ cat /proc/12345/maps
+
+# 스레드 리스트 확인
+$ ls /proc/12345/task/
+
+# 특정 스레드의 실행 위치(스택) 확인
+$ cat /proc/12345/task/12346/stack
+✅ 주요 지식 정리
+/proc/[pid]/task/ = 스레드 단위 정보
+
+/proc/[pid]/maps = 전체 메모리 구조 (heap, stack, libc, mmap 등)
+
+/proc/[pid]/stack = 현재 스택 콜 위치
+
+/proc/[pid]/status = 메모리 사용량, UID, GID, 스레드 수 등 요약
+
+/proc/[pid]/fd/ = 열려있는 파일 목록
+
+✅ /proc/[PID]/의 메모리 관련 파일 설명
+경로	요약	상세 설명
+maps	메모리 매핑 정보	프로세스의 가상 메모리 공간 구조를 보여줌. 각 구간(스택, 힙, 라이브러리 등)의 주소 범위, 접근 권한(rwx), 매핑된 파일명 등을 포함
+smaps	상세한 메모리 통계	maps와 동일한 주소 구간별로 RSS(실 사용), PSS(공유 비중 포함), Private_Clean/Dirty, Swap 사용량 등 세부 정보 포함
+smaps_rollup	smaps 요약 합계	smaps의 전체 누적 합계만 표시. 스크립트/툴이 전체 메모리 통계를 쉽게 읽도록 최적화됨
+statm	페이지 단위 메모리 정보	[전체 크기] [RSS] [공유] [텍스트] [라이브러리] [데이터] [DIRTY] 페이지 수로 표현됨. 예: 123 45 10 20 5 30 0
+status	Vm 관련 필드	VmSize, VmRSS, VmData, VmStk, VmExe 등의 메모리 필드를 kB 단위로 요약. (사실상 smaps 요약 버전)
+pagemap	가상 주소 → 물리 프레임 매핑	각 페이지의 PFN(Page Frame Number) 및 상태 플래그 포함. mmap 영역, 페이지 캐시 여부, 스왑 여부 등 추적 가능. 직접 파싱해야 함
+clear_refs	접근 플래그 초기화	echo 1 > clear_refs 로 실행하면 Referenced 플래그 초기화 (메모리 접근 추적 시 유용)
+mem	실제 메모리 내용 (바이너리)	디버깅이나 검사용으로만 사용. 읽기 위해선 ptrace 권한 필요 (디버거처럼). 메모리 덤프 추출 가능
+
+📌 주요 필드 의미 정리
+1. maps
+bash
+Copy
+Edit
+주소 범위          권한 offset   디바이스  inode   파일명
+00400000-00452000  r-xp   00000000 08:01   123456  /bin/bash
+rwxp : 읽기(r), 쓰기(w), 실행(x), private(p)/shared(s)
+
+어떤 메모리 구간이 코드(.text), 힙(heap), 스택(stack), mmap 영역인지 구분 가능
+
+[stack], [heap], [vdso], [vvar], [vsyscall] 등 특별 구간도 표시됨
+
+/proc/[PID]/maps 파일의 의미와 해석
+/proc/[PID]/maps 파일은 해당 프로세스의 가상 메모리 주소 공간에 매핑된 모든 메모리 영역의 정보를 보여줍니다.
+각 줄은 하나의 메모리 영역(메모리 매핑)을 나타내며, 아래와 같은 정보를 포함합니다:
+
+text
+주소범위           권한   오프셋    디바이스  inode    파일명(또는 영역명)
+00400000-00401000 r--p 00000000 08:00 403927 /home/jaeholee/SUBJECT/cluster/test/t
+각 필드의 의미
+필드	예시 값	설명
+주소범위	00400000-00401000	이 메모리 영역의 시작 주소와 끝 주소(16진수, 가상 주소)
+권한	r--p	r: 읽기, w: 쓰기, x: 실행, p: private(복사-시-쓰기, COW), s: shared(공유)
+오프셋	00000000	매핑된 파일에서의 시작 오프셋(바이트 단위)
+디바이스	08:00	장치 번호(주번호:부번호), 파일이 저장된 디바이스 식별자
+inode	403927	파일 시스템에서의 inode 번호(파일 고유 식별자)
+파일명/영역명	/home/jaeholee/... 또는 [stack] 등	매핑된 파일의 경로나, 특별한 영역 이름([stack], [vdso], [heap] 등)
+실제 예시 해석
+text
+00400000-00401000 r--p 00000000 08:00 403927 /home/jaeholee/SUBJECT/cluster/test/t
+00400000-00401000: 이 영역의 가상 주소 범위
+
+r--p: 읽기 가능, 쓰기/실행 불가, private(COW)
+
+00000000: 파일의 0 바이트부터 매핑 시작
+
+08:00: 파일이 위치한 디바이스
+
+403927: 파일의 inode 번호
+
+/home/jaeholee/SUBJECT/cluster/test/t: 실제 매핑된 실행 파일
+
+특별한 영역 이름
+[stack]: 이 프로세스의 사용자 스택 영역
+
+[heap]: 동적 메모리(예: malloc 등으로 할당된 영역)
+
+[vdso]: 커널이 사용자 공간에 제공하는 가상 동적 공유 객체(시스템 콜 가속 등)
+
+[vvar]: 커널이 제공하는 가상 변수 영역(시계 정보 등)
+
+[vsyscall]: 예전 시스템 콜 가속용 가상 영역
+
+라이브러리/공유 객체 매핑
+예:
+
+text
+73611c200000-73611c228000 r--p 00000000 fc:00 7341524 /usr/lib/x86_64-linux-gnu/libc.so.6
+libc.so.6 라이브러리가 이 주소 범위에 매핑됨
+
+여러 영역(r--p, r-xp, rw-p 등)으로 나뉘는 이유는 코드/데이터/기타 세그먼트별로 권한이 다르기 때문
+
+권한 필드 상세
+r: 읽기 가능
+
+w: 쓰기 가능
+
+x: 실행 가능
+
+p: private(COW, 복사-시-쓰기)
+
+s: shared(공유 매핑)
+
+정리
+/proc/[PID]/maps는 프로세스의 메모리 매핑 상태(코드, 데이터, 라이브러리, 스택, 힙, 커널 가상영역 등)를 실시간으로 보여줍니다.
+
+각 줄은 하나의 메모리 영역을 나타내며, 주소, 권한, 매핑 파일(또는 특별 영역명) 정보를 담고 있습니다.
+
+이 정보를 통해 디버깅, 메모리 분석, 보안 진단 등 다양한 시스템 프로그래밍 작업이 가능합니다.
+
+궁금한 특정 줄이나 필드가 있으면 더 자세히 설명해드릴 수 있습니다!
+
+2. smaps
+makefile
+Copy
+Edit
+00400000-00452000 r-xp 00000000 08:01 123456 /bin/bash
+Size:               328 kB
+Rss:                320 kB
+Pss:                320 kB
+Shared_Clean:       0 kB
+Private_Clean:     300 kB
+...
+Referenced:        300 kB
+Anonymous:          20 kB
+Swap:                0 kB
+Rss: 실제 물리 메모리에 올라간 크기 (Resident Set Size)
+
+Pss: 공유 메모리를 비율로 나눠 계산한 값
+
+Anonymous: 파일이 아닌 메모리 (ex: malloc)
+
+Swap: 스왑 공간에 밀려나 있는 크기
+
+Referenced: 최근 접근된 페이지 수
+
+3. statm
+text
+Copy
+Edit
+Size    Resident    Shared    Text    Lib    Data    Dirty
+12345   6789        1000      2345    0      4000    0
+단위는 페이지 수 (보통 4KB)
+
+Size: 전체 가상 메모리
+
+Resident: 메모리에 실제 올라간 총 페이지
+
+Shared: 다른 프로세스와 공유된 페이지 수
+
+4. status 안의 메모리 필드
+yaml
+Copy
+Edit
+VmSize:   12000 kB  # 전체 가상 메모리
+VmRSS:     8000 kB  # 실제 올라간 메모리
+VmData:    6000 kB  # 힙 및 데이터 영역
+VmStk:      132 kB  # 스택
+VmExe:      512 kB  # 실행 가능한 코드
+단위는 전부 kB
+
+스크립트가 빠르게 요약할 때 많이 참조
+
+5. pagemap (심화 내용)
+페이지 당 64비트로 PFN, 플래그 정보 포함
+
+63비트: 페이지 존재 여부
+
+55~0비트: PFN (Page Frame Number)
+
+활용 예: 메모리 접근 추적, 페이지 교체 분석
+
+읽기 예시:
+
+bash
+Copy
+Edit
+sudo dd if=/proc/<pid>/pagemap bs=8 skip=$((address / 4096)) count=1 2>/dev/null | hexdump
+🔍 주로 사용할 항목 요약
+목적	파일
+전체 메모리 맵 파악	maps
+힙/스택/코드 사용량 분석	status, smaps
+물리 메모리 여부 확인	smaps, statm
+페이지 단위 추적	pagemap, clear_refs
+실제 메모리 접근 내용	mem
+
+필요하면 각 파일을 기반으로 힙 크기만 뽑는다거나, 스레드별 스택 메모리 분석 등도 할 수 있어. 더 궁금한 항목 있어? 예: heap 영역만 분석, 스왑된 영역 확인, 공유 라이브러리 메모리 분포 등.
+
+1. test.c 컴파일 후 실행 → execve() → 프로세스 생성됨 (PID = 1000)
+   └─ Main 스레드(TID = 1000, TGID = 1000)도 함께 생성 → 스케줄러에 등록
+
+2. main() 실행 중 pthread_create() 호출
+   └─ clone() 시스템 콜 → 새로운 TID 1001 (TGID = 1000) 생성 → 스레드2
+
+3. 둘 다 같은 프로세스의 일부이며, 스케줄러는 각각을 독립적으로 실행 대상으로 취급
+
+4. 스케줄러는 TID 1000, 1001, 그리고 시스템의 다른 프로세스들을 관리하며
+   시점에 따라 하나를 선택해 CPU에 올림
+
+5. CPU가 스레드1 혹은 스레드2를 실행시키면 해당 PC부터 실행
+
+6. 실행 중 I/O, sleep, mutex 등 만나면 block → 스케줄러가 다른 실행 단위로 전환
+
+
+
+📌 메인 스레드는 왜 PID와 TID가 같을까?
+리눅스에서는 "프로세스 그룹" ≈ 스레드 그룹 개념을 씀
+
+TGID(Thread Group ID) = 메인 스레드의 PID
+
+나머지 스레드는 자신만의 TID를 갖지만 TGID는 메인 스레드와 같음
+
+🔍 스케줄러는 실제로 어떻게 찾는가?
+스케줄러는 run queue에 있는 task_struct 리스트에서 TID를 기준으로 스레드를 선택합니다.
+
+즉:
+
+c
+Copy
+Edit
+struct task_struct {
+    pid_t pid;     // == TID
+    pid_t tgid;    // == 메인 스레드 PID (프로세스 ID)
+    ...
+};
+pid : 현재 task_struct(스레드)의 고유 ID → 스케줄러가 사용하는 ID
+
+tgid : 이 스레드가 속한 "프로세스 그룹"의 대표 ID (메인 스레드의 PID)
+
+
+
+✅ 1. 스레드풀(Thread Pool) 구조 설계
+📌 목적
+많은 작업(작은 단위의 task)을 처리하기 위해 스레드를 매번 생성/삭제하는 오버헤드 제거
+
+일정 수의 worker thread를 미리 만들어 놓고 재사용
+
+📌 기본 구조
+c
+Copy
+Edit
++----------------------+
+|      Thread Pool     |
+|----------------------|
+|  Worker Thread[0]    |
+|  Worker Thread[1]    | <-- N개의 스레드가 대기
+|  ...                 |
+|  Worker Thread[N-1]  |
++----------------------+
+         ▲
+         |
++------------------+
+|     Job Queue     | <-- 작업(Task)을 담는 큐 (보통 큐 보호용 mutex + cond 사용)
++------------------+
+📌 핵심 요소
+작업 큐: 처리할 함수 포인터 + 인자 쌍 저장
+
+mutex + 조건변수: 작업이 큐에 생길 때 알림
+
+worker thread: 무한루프 돌며 작업 대기/실행
+
+📌 간단한 흐름
+main()에서 스레드풀 생성 → worker thread 시작
+
+외부에서 작업 enqueue
+
+조건변수로 스레드 깨움
+
+작업 처리 → 다시 대기
+
+✅ 2. TLS (Thread-Local Storage)
+📌 설명
+여러 스레드가 실행되더라도 각자만의 독립적인 전역 변수처럼 사용할 수 있는 저장 공간
+
+📌 목적
+공유되지 않아야 하는 스레드 고유 데이터 (예: errno, 로그 버퍼) 를 안전하게 보관
+
+📌 구현 방식
+C에서는 __thread, thread_local, 또는 pthread_key_create() 사용
+
+c
+Copy
+Edit
+__thread int thread_local_val = 0;  // 스레드마다 다른 메모리 공간
+📌 내부적으로는?
+각 스레드는 고유의 Thread Control Block (TCB)를 갖고 있고,
+
+이 TCB에 TLS 포인터가 포함됨 (FS/GS segment register로 접근)
+
+✅ 3. clone() 시스템 콜과의 관계
+📌 기본 개념
+clone()은 fork()와 비슷하지만, 세부적으로 어떤 리소스를 공유할지를 제어할 수 있음.
+
+리눅스에서 pthread는 사실상 clone()을 사용해서 구현됨
+
+📌 사용 예시
+c
+Copy
+Edit
+int clone(int (*fn)(void *), void *child_stack, int flags, void *arg);
+📌 주요 flags 예시
+flag	의미
+CLONE_VM	메모리 공간 공유
+CLONE_FILES	파일 디스크립터 공유
+CLONE_SIGHAND	시그널 핸들 공유
+CLONE_THREAD	같은 TID 그룹에 포함 → pthread 의미
+CLONE_FS	파일시스템 정보 공유
+
+📌 pthread_create는 내부적으로
+c
+Copy
+Edit
+clone(fn, stack, CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND | CLONE_THREAD, arg);
+와 유사하게 호출됨.
+
+✅ 전체 흐름 정리
+main() 함수에서 thread pool 생성
+
+내부적으로 pthread_create() → 실제로는 clone()으로 스레드 생성
+
+각 스레드는 TLS를 통해 자신만의 데이터 유지
+
+worker는 task queue를 공유하며 작업 분담
+
+좋은 질문이야. TLS (Thread-Local Storage) 는 말 그대로 각 스레드만 접근할 수 있는 지역 저장 공간인데, 물리적으로 어디에 존재하는가에 대한 정확한 설명을 해줄게.
+
+✅ 요약: TLS는 "스레드 전용 메모리 영역"으로, 스레드의 스택 영역 근처 또는 커널이 관리하는 TCB(Thread Control Block)에 연동된 TLS 영역에 위치함.
+🔍 상세 설명
+1. 사용자 공간에서의 위치
+TLS는 실제로는 글로벌 변수처럼 보이지만, 각 스레드마다 따로 메모리 공간을 갖음.
+
+이 공간은 일반적으로 스택과는 별도의 메모리 영역으로 할당됨. (스택 위에 바로 붙는 건 아님)
+
+glibc + ELF 기반 시스템에서는 TLS segment (.tdata, .tbss) 로 분리되어 있음.
+
+📁 ELF 구조 예시
+bash
+Copy
+Edit
+readelf -l ./a.out
+plaintext
+Copy
+Edit
+TLS             0x0000000000601020 0x0000000000601020 0x0000000000000020
+.tdata, .tbss 섹션에 해당하는 TLS 변수들이 여기에 매핑됨.
+
+2. 접근 방식
+CPU는 각 스레드의 TCB(Thread Control Block)를 FS 혹은 GS segment register를 통해 접근함.
+
+즉, 컴파일러는 TLS 변수에 접근할 때:
+
+c
+Copy
+Edit
+__thread int x;
+를 다음과 같이 해석함:
+
+perl
+Copy
+Edit
+mov %fs:offset, %eax
+3. 커널 및 glibc 레벨
+pthread_create()를 통해 스레드를 만들면 glibc는 새로운 스택과 TLS를 clone()의 CLONE_TLS 플래그와 함께 설정
+
+각 스레드는 자신만의 TLS base 주소를 갖고, 이는 fs_base 혹은 gs_base에 저장됨 (x86/x86_64 기준)
+
+4. 관찰 예시
+⬛ TLS 메모리 확인
+c
+Copy
+Edit
+__thread int tls_var = 42;
+
+void *thread_func(void *arg) {
+    printf("addr: %p, val: %d\n", &tls_var, tls_var);
+    return NULL;
+}
+각 스레드에서 &tls_var 출력 시 주소가 다름 → 서로 독립적인 메모리 공간 사용 중이라는 뜻.
+
+✅ 결론
+항목	내용
+메모리 영역	사용자 공간, 커널이 지정한 TLS segment (.tdata/.tbss)
+위치	스택과는 별도, 스레드당 고유 주소 공간
+접근 방법	FS/GS segment 레지스터 사용
+설정 방식	pthread_create() 시 자동으로 설정됨 (glibc + clone + CLONE_TLS)
+
+추가로:
+
+pthread_key_create() 기반의 동적 TLS
+
+__thread, thread_local 기반의 정적 TLS
+에 대해서도 설명이 가능해. 더 파고들고 싶은 쪽 있을까?
+

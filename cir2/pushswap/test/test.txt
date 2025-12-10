@@ -1,0 +1,258 @@
+범위
+1 >> 1 <= val < numsize*(1/divide)
+2 >>(1/divide) <= val < (2/divide)
+3 >>(1/divide) <= val < (3/divide)
+4 >> (1/divide) <= val <= numsize;
+
+1. atop / btable 확인
+tmp_sort_logic(ahead, bhead, numsize)
+{
+    long long *btable
+    int div
+    int arange
+    int btable_range
+    int range_head
+    int range_tail
+    int i//??
+    1. btable 생성 및 초기화
+       btable = tmp_init_table(numsize)
+                {
+                    table = malloc(sizeof(long long) * (numsize + 1));
+                    if (!table)
+                        return (NULL);
+                    i = 0;
+                    while (i <= numsize)
+                        table[i] = -1;
+                        i++;
+                    return (table);
+                }
+        if (!btable)
+            return ;
+    2. 범위 확정
+        div = tmp_divide(numsize, divide)
+            {
+                //조건필요?
+                return (numsize / divide);
+            }
+    3. 반복 시작 // 언제까지??
+        while ( (3 * div) != tmp_stack_size(b/head))// 일단 btable의 크기/bstack 크기가 100개 기준 75개 // 500개 기준 
+                                {
+                                    int i
+                                    t_stack *stack
+
+                                    i = 0;
+                                    stack = *head;
+                                    while (stack)
+                                    {
+                                        stack = stack -> next;
+                                        i++;
+                                    }
+                                    return (i);
+                                }
+        {
+            0. btable 갱신
+                tmp_table_re(b/head, b/table);
+                {
+                    int i
+                    t_stack *stack
+                    
+                    stack = *head
+                    i = 0;
+                    while (stack)
+                    {
+                        table[i] = stack -> num;
+                        stack = stack -> next;
+                        i++;
+                    }
+                    table[i] = -1;
+                }
+            1. atop 범위 확인
+                arange = tmp_find_range(ahead, numsize, div);
+                        {
+                            atop = (*ahead)-> num;
+                            if 1 <= atop < (1 * div)
+                                return (1);
+                            else if (1 * div) <= atop < (2 * div)
+                                return (2);
+                            else if (2 * div) <= atop < (3 * div)
+                                return (3);
+                            else // ((3 * div) <= atop <= numsize)
+                                return (4);
+                        }
+            1-1. arange = 4 면 ra
+                if (arange == 4)
+                {
+                    rotate(ahead);
+                    ft_printf("ra\n");
+                    continue ;
+                }
+            2. btable 내에 범위  arange 확인 진행
+                btable_range = tmp_btable_range(btable, numsize, arange, div)
+                                {
+                                    int i
+                                    static int signal[3]
+
+                                    i = 0;
+                                    while (btable[i] != -1)
+                                    {
+                                        if ((range - 1) * div <= btable[i] < (range * div))
+                                                signal[range - 1] == 1;
+                                        i++;
+                                    }
+                                    if (signal[arange - 1])
+                                        return (-1);
+                                    return (tmp_sum_signal(signal));
+                                            {
+                                                int i
+                                                int sum
+                                            
+                                                i = 0;
+                                                sum = 0;
+                                                while (i < 3)
+                                                {
+                                                    sum += signal[i];
+                                                    i++;
+                                                }
+                                                reuturn (sum);
+                                            }
+                                }
+                //btable_range == -1: arange 존재 // btable_range == 0 ~ 3 숫자 만큼 범위 존재
+                2-0 arange 범위 존재 o 경우 // 범위 3개 일경우 무조건 / 범위 
+                if (btable_range == -1)
+                {
+                    2-0-1. range_head_ind, range_tail_ind arange 범위 가저오기
+                        range_head_ind = tmp_find_head_ind(arange, btable, div);
+                        range_tail_ind = tmp_find_tail_ind(arange, btable, div);
+                                            {
+                                                int i
+                                                int tail_ind
+
+                                                i = 0;
+                                                tail_ind = -1;
+                                                while (btable[i] != -1)
+                                                if ((range - 1) * div <= btable[i] < (range  * div))
+                                                {
+                                                    while ((range - 1) * div <= btable[i] < (range  * div))
+                                                        i++;
+                                                    tail_ind = i - 1;
+                                                }
+                                                else
+                                                    i++;
+                                                return (tail_ind);
+                                            }
+                        if (range_head_ind <= range_tail_ind)
+                        {
+                            push(ahead, bhead);
+                            ft_printf("pb\n");
+                        }
+
+                            int bstack_size
+
+                            bstack_size = tmp_stack_size(b/head)
+                        else
+                        {
+                            tmp_rot_push_ind(**ahead, **bhead, range_head_ind, range_tail_ind);
+                            {
+                                int bstack_size
+                                int tmp_count
+
+                                bstack_size = tmp_stack_size(b/head);
+                                
+                                if (range_head_ind > ((bstack_size - 1) - range_tail_ind))
+                                    tmp_count = (bstack_size - 1) - range_tail_ind;
+                                else
+                                    tmp_count = range_head_ind;
+                                while (tmp_count)
+                                {
+                                    if (range_head_ind <= ((bstack_size - 1) - range_tail_ind))
+                                    {
+                                        rotate(bhead);
+                                        ft_printf("rb\n");
+                                    }
+                                    else
+                                    {
+                                        rrotate(bhead);
+                                        ft_printf("rrb\n");
+                                    }
+                                    tmp_count--;
+                                }
+                            }
+
+                        }
+
+                        
+                }
+                2-1 arange 범위 존재 x 경우
+                2-1-1. 범위 1개 이하
+                else if (0 <= btable_range <= 1)
+                {
+                    push(ahead, bhead);
+                    ft_printf("pb\n");
+                }
+                2-1-2. 범위 2개 ( arange 의 값 3 > 2head // 2 > 1head 1> 3head)
+                else if (btable_range == 2) // else?
+                {
+                        range_head_ind = tmp_find_head_ind(tmp_head_range(arange), btable, div);
+                                                            {
+                                                                if (arange == 3)
+                                                                    return (2)
+                                                                else if (arange == 2)
+                                                                    return (1)
+                                                                else// (arange == 1)
+                                                                    return (3)
+                                                            }
+                                    tmp_find_head_ind(range, btable, div);
+                                    {
+                                        int i
+                                        int head_ind;
+
+                                        i = 0;
+                                        head_ind = -1;
+                                        while (btable[i] != -1)
+                                        {
+                                            if ((range - 1) * div <= btable[i] < (range  * div))
+                                            {
+                                                head_ind = i;
+                                                while ((range - 1) * div <= btable[i] < (range  * div))
+                                                    i++;
+                                            }
+                                            else
+                                                i++;
+                                        }
+                                        return (head_ind);
+                                    }
+                        tmp_2range_r_push_ind(**ahead, **bhead, range_head_ind);
+                        {
+                            int bstack_size
+
+                            bstack_size = tmp_stack_size(b/head)
+                            tmp_r_rotate(range_head_ind, b/stack_size - 1, **bhead, **ahead);
+                            {
+                                (void) ahead; //일단 임시
+                                int	count;
+
+                                tmp_count = range_head_ind;
+                                if (range_head_ind > (stack_size - range_head_ind))
+                                    tmp_count = stack_size - range_head_ind;
+                                while (tmp_count)
+                                {
+                                    if (range_head_ind <= (stack_size - range_head_ind))
+                                    {
+                                        rotate(bhead);
+                                        ft_printf("rb\n");
+                                    }
+                                    else
+                                    {
+                                        rrotate(bhead);
+                                        ft_printf("rrb\n");
+                                    }
+                                    tmp_count--;
+                                }
+                            }
+                            push(ahead, bhead);
+                    	    ft_printf("pb\n");
+                        }
+                }
+        }
+    free(btable);
+}

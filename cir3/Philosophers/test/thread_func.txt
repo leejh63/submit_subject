@@ -1,0 +1,408 @@
+아래 표들은 POSIX Threads(pthread) 인터페이스에서 가장 많이 쓰이는 식별자·구조체·자료형을 카테고리별로 모두 모아 정리한 것입니다.
+※ 내부 필드는 구현(libc) 마다 다르므로 “주요 필드”는 개념적 용도를 중심으로 적었습니다.
+
+1. 스레드 식별·속성
+자료형(헤더)	용도	주요 필드·특징	정적 초기화 매크로
+pthread_t <pthread.h>	스레드 ID (opaque)	실질적으로는 포인터·정수 등 구현 종속	없음
+pthread_attr_t	스레드 속성 묶음	detach state, stack addr/size, sched policy/param 등	PTHREAD_ATTR_INITIALIZER (glibc엔 없음)
+
+주요 함수 ↔ 자료형
+
+pthread_attr_init(&attr);
+pthread_attr_setstacksize(&attr, 1<<20);  // 1 MB
+pthread_create(&tid, &attr, func, NULL);
+pthread_attr_destroy(&attr);
+2. 동기화 객체
+2-1. 뮤텍스 계열
+자료형	용도	초기화 매크로
+pthread_mutex_t	상호배제 잠금	PTHREAD_MUTEX_INITIALIZER
+pthread_mutexattr_t	뮤텍스 속성 (종류·프로토콜 등)	PTHREAD_MUTEXATTR_INITIALIZER
+
+2-2. 조건 변수
+자료형	용도	초기화 매크로
+pthread_cond_t	스레드 대기/신호	PTHREAD_COND_INITIALIZER
+pthread_condattr_t	시계 종류(CLOCK_REALTIME/… 등)	PTHREAD_CONDATTR_INITIALIZER
+
+2-3. 읽기/쓰기 락 · 스핀락 · 바리어
+자료형	설명	초기화 매크로
+pthread_rwlock_t	다중 reader / 단일 writer 잠금	PTHREAD_RWLOCK_INITIALIZER
+pthread_rwlockattr_t	읽기/쓰기 락 속성	PTHREAD_RWLOCKATTR_INITIALIZER
+pthread_spinlock_t	사용자 공간 스핀락 (busy-wait)	없음
+pthread_barrier_t	스레드 집결 지점	없음
+pthread_barrierattr_t	프로세스간 공유 여부 등	없음
+
+3. TLS·단발 초기화
+자료형	용도
+pthread_key_t	TLS 슬롯 키 (pthread_key_create)
+pthread_once_t	한 번만 실행 보장 (pthread_once)
+
+4. 스케줄·시그널 보조 자료형
+자료형	설명
+struct sched_param	우선순위 필드 int sched_priority;
+sigset_t	스레드별 시그널 마스크 (pthread_sigmask)
+struct timespec	절대/상대 시간 지정 (cond timedwait 등)
+
+5. clone() - 내부 연계 자료형 (참고)
+자료형	설명
+pid_t	커널 TID ( syscall(SYS_gettid) )
+struct clone_args (glibc에는 없음)	clone3() 커널 호출 시 사용
+
+6. 한눈에 보는 예시 코드 흐름
+c
+Copy
+Edit
+#include <pthread.h>
+#include <stdio.h>
+#include <unistd.h>
+
+/* 전역 동기화 객체 – 정적 초기화 */
+pthread_mutex_t   mtx  = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t    cond = PTHREAD_COND_INITIALIZER;
+pthread_once_t    once = PTHREAD_ONCE_INIT;
+pthread_key_t     tls_key;
+
+/* once: TLS 소멸자·키 생성 */
+void tls_init_once(void)
+{
+    pthread_key_create(&tls_key, free);   // 스레드 종료 시 free
+}
+
+void *worker(void *arg)
+{
+    /* TLS 변수 준비 */
+    pthread_once(&once, tls_init_once);
+    int *counter = calloc(1, sizeof(int));
+    pthread_setspecific(tls_key, counter);
+
+    /* 임계영역 예시 */
+    pthread_mutex_lock(&mtx);
+    (*counter)++;
+    printf("TID=%lu, local=%d\n", pthread_self(), *counter);
+    if (*counter == 3)               /* 마지막 스레드라면 */
+        pthread_cond_signal(&cond);  /* 메인에 알림         */
+    pthread_mutex_unlock(&mtx);
+    return NULL;
+}
+
+int main(void)
+{
+    pthread_t tid[3];
+    pthread_attr_t attr;
+
+    /* 속성:  detached 스레드 X, 스택 1 MB 지정 */
+    pthread_attr_init(&attr);
+    pthread_attr_setstacksize(&attr, 1 << 20);
+
+    for (int i = 0; i < 3; ++i)
+        pthread_create(&tid[i], &attr, worker, NULL);
+
+    /* 3개 완료될 때까지 대기 */
+    pthread_mutex_lock(&mtx);
+    pthread_cond_wait(&cond, &mtx);
+    pthread_mutex_unlock(&mtx);
+
+    for (int i = 0; i < 3; ++i)
+        pthread_join(tid[i], NULL);
+
+    /* 정리 */
+    pthread_key_delete(tls_key);
+    pthread_attr_destroy(&attr);
+    pthread_mutex_destroy(&mtx);
+    pthread_cond_destroy(&cond);
+    return 0;
+}
+흐름 요약
+속성 객체로 스레드 스택 등 설정.
+
+TLS 키를 pthread_once 로 한 번만 생성 → 각 스레드별 독립 데이터 보관.
+
+뮤텍스/조건변수로 작업 완료를 메인 스레드에 알림.
+
+종료 시 모든 동기화 객체·키·속성 정리.
+
+참고
+대부분의 자료형은 opaque 구조체(멤버가 노출되지 않음)라 실제 필드는 구현마다 다르다.
+
+정적 초기화 매크로는 헤더 수준에서 사용, 동적 초기화 함수와는 중복 사용 금지.
+
+clone() 호출은 glibc 내부에서 처리되며, 사용자 코드에서는 pthread_* 인터페이스만 쓰면 된다.
+
+필요하면 세마포어( sem_t ), 스핀락, 타이머 기반 함수 등도 추가로 다뤄줄 수 있어. 더 궁금한 점 알려줘!
+
+
+
+
+
+
+
+You said:
+구조체 형태도 알려줄것
+
+
+ChatGPT said:
+
+Thought for 34 seconds
+POSIX Threads ― 내부 자료형·구조체 모양 (리눅스 glibc 2.39 /x86-64)
+표준은 대부분을 opaque(불투명) 하게 정의하지만, glibc 헤더를 열어 보면 실제 필드 구성을 볼 수 있다.
+아래 구조체 스냅숏은 glibc/sysdeps/nptl/... 소스에서 발췌한 64-bit x86 버전이며, 다른 아키텍처·libc에선 크기나 필드가 달라질 수 있다.
+
+구분	실체(struct/union)	주요 필드 (요약)	출처
+스레드 ID	typedef unsigned long pthread_t;	그냥 64-bit 정수 (커널 TID와 1 : 1 매핑 아님)	
+codebrowser.dev
+스레드 속성	union pthread_attr_t { char __size[__SIZEOF_PTHREAD_ATTR_T]; long __align; }; (__SIZEOF_PTHREAD_ATTR_T = 56 바이트)	align 용 long + 56-byte raw block—모든 속성(스택·detach state 등)을 이 버퍼에 패킹	
+codebrowser.dev
+뮤텍스 내부체	struct __pthread_mutex_s { int __lock; unsigned int __count; int __owner; unsigned int __nusers; int __kind; short __spins; short __elision; __pthread_list_t __list; };	lock 값, 재귀 횟수, 소유 TID, 대기자 수, 종류(일반/재귀/PI…), RTM elision 필드, robust 리스트 포인터 등	
+codebrowser.dev
+뮤텍스 포장	union pthread_mutex_t { struct __pthread_mutex_s __data; char __size[__SIZEOF_PTHREAD_MUTEX_T]; long __align; };	정적 초기화·ABI 호환을 위한 union 래퍼	
+codebrowser.dev
+조건변수 내부체	struct __pthread_cond_s { __atomic_wide_counter __wseq; __atomic_wide_counter __g1_start; unsigned int __g_refs[2]; unsigned int __g_size[2]; unsigned int __g1_orig_size; unsigned int __wrefs; unsigned int __g_signals[2]; };	두 세대 대기순서 카운터, 기다리는 그룹 크기/참조, signal/broadcast 통계 등	
+codebrowser.dev
+조건변수 포장	union pthread_cond_t { struct __pthread_cond_s __data; char __size[__SIZEOF_PTHREAD_COND_T]; long long __align; };		
+codebrowser.dev
+읽기-쓰기 락	struct __pthread_rwlock_arch_t (아키별 정의) → union pthread_rwlock_t	상태·대기 큐·writer 정보 등 포함	
+codebrowser.dev
+스핀락	typedef volatile int pthread_spinlock_t;	단순 정수형 (0 = unlock)	
+codebrowser.dev
+바리어	union pthread_barrier_t { char __size[__SIZEOF_PTHREAD_BARRIER_T]; long __align; };	세대·대기자 수 등을 내부에서 관리	
+codebrowser.dev
+TLS 키	typedef unsigned int pthread_key_t;	최대 1024 개의 슬롯(glibc)	
+codebrowser.dev
+once 플래그	typedef int pthread_once_t; (__ONCE_ALIGNMENT)	0→미실행, 1→실행중, 2→완료
+
+
+✅ 1. 스레드 관련 주요 함수들 (기초 + 고급)
+🔷 1.1 기본 스레드 제어
+함수	역할	인자 설명	반환
+pthread_create	새 스레드 생성	pthread_t*, pthread_attr_t*, start_routine, arg	0 또는 에러
+pthread_join	해당 스레드가 종료될 때까지 대기	pthread_t, void** retval	0 또는 에러
+pthread_exit	현재 스레드 종료	void* retval	반환 없음
+pthread_self	현재 스레드 ID 반환	없음	pthread_t
+pthread_equal	두 스레드 ID 비교	pthread_t, pthread_t	같으면 1
+
+🔷 1.2 스레드 속성 관리 (pthread_attr_t)
+함수	역할	인자	반환
+pthread_attr_init	속성 객체 초기화	pthread_attr_t*	0
+pthread_attr_destroy	속성 객체 제거	pthread_attr_t*	0
+pthread_attr_setstacksize	스택 크기 설정	pthread_attr_t*, size_t	0
+pthread_attr_getstacksize	현재 설정된 스택 크기 가져오기	pthread_attr_t*, size_t*	0
+pthread_attr_setdetachstate	분리 상태 설정 (PTHREAD_CREATE_DETACHED 등)	pthread_attr_t*, int	0
+pthread_attr_getdetachstate	분리 상태 얻기	pthread_attr_t*, int*	0
+
+🔷 1.3 스레드 동기화 - 뮤텍스 (pthread_mutex_t)
+함수	역할	설명
+pthread_mutex_init	뮤텍스 초기화	pthread_mutex_t*, pthread_mutexattr_t*
+pthread_mutex_lock	뮤텍스 잠금	pthread_mutex_t*
+pthread_mutex_trylock	즉시 잠금 시도 (실패해도 반환)	pthread_mutex_t*
+pthread_mutex_unlock	뮤텍스 해제	pthread_mutex_t*
+pthread_mutex_destroy	뮤텍스 제거	pthread_mutex_t*
+
+🔷 1.4 스레드 동기화 - 조건 변수 (pthread_cond_t)
+함수	역할	설명
+pthread_cond_init	조건변수 초기화	pthread_cond_t*, pthread_condattr_t*
+pthread_cond_wait	조건이 만족될 때까지 대기 (mutex 해제 → 대기 → 획득)	pthread_cond_t*, pthread_mutex_t*
+pthread_cond_signal	조건 변수 깨움 (1개 스레드)	pthread_cond_t*
+pthread_cond_broadcast	조건 변수 깨움 (모든 대기 중인 스레드)	pthread_cond_t*
+pthread_cond_destroy	조건 변수 제거	pthread_cond_t*
+
+🔷 1.5 스레드 동기화 - 기타
+함수	역할	설명
+pthread_detach	join 없이 자동 종료 자원 회수 설정	pthread_t
+pthread_once	함수 한번만 실행 (init용)	pthread_once_t*, void (*init_func)(void)
+pthread_cancel	특정 스레드 취소 요청	pthread_t
+pthread_kill	특정 스레드에 시그널 전송	pthread_t, int sig
+pthread_yield	CPU 양보	없음 (glibc에선 sched_yield())
+
+🧪 전체 흐름 예제 코드
+c
+Copy
+Edit
+#include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+
+pthread_mutex_t lock;
+pthread_cond_t cond;
+int ready = 0;
+
+void *worker(void *arg) {
+    int num = *(int *)arg;
+    pthread_mutex_lock(&lock);
+    while (!ready)
+        pthread_cond_wait(&cond, &lock);
+    printf("🔹 Worker %d started!\n", num);
+    pthread_mutex_unlock(&lock);
+    pthread_exit(NULL);
+}
+
+int main(void) {
+    pthread_t threads[3];
+    pthread_attr_t attr;
+    int args[3] = {1, 2, 3};
+
+    // 🔧 속성 설정
+    pthread_attr_init(&attr);
+    pthread_attr_setstacksize(&attr, 1024 * 1024); // 1MB 스택
+
+    pthread_mutex_init(&lock, NULL);
+    pthread_cond_init(&cond, NULL);
+
+    for (int i = 0; i < 3; i++)
+        pthread_create(&threads[i], &attr, worker, &args[i]);
+
+    sleep(1); // 일부러 대기
+
+    pthread_mutex_lock(&lock);
+    ready = 1;
+    pthread_cond_broadcast(&cond); // 모든 스레드 시작
+    pthread_mutex_unlock(&lock);
+
+    for (int i = 0; i < 3; i++)
+        pthread_join(threads[i], NULL);
+
+    // 🔚 자원 해제
+    pthread_mutex_destroy(&lock);
+    pthread_cond_destroy(&cond);
+    pthread_attr_destroy(&attr);
+
+    return 0;
+}
+🔍 요약
+범주	대표 함수들
+생성/제어	pthread_create, pthread_exit, pthread_join, pthread_self, pthread_equal
+속성 설정	pthread_attr_init, pthread_attr_setstacksize, pthread_attr_setdetachstate 등
+동기화 (뮤텍스)	pthread_mutex_init, lock, unlock, destroy
+동기화 (조건변수)	pthread_cond_wait, signal, broadcast, destroy
+기타	pthread_detach, pthread_cancel, pthread_kill, pthread_once
+
+더 필요한 함수, 또는 다른 동기화 수단 (barrier, read-write lock, semaphore) 도 필요하면 추가로 설명해줄게.
+
+
+좋아. 이번에는 POSIX 스레드(pthread) 관련 더 많은 함수들을 포함해서 아래 항목별로 정리하고, 마지막에 전체 흐름을 반영한 코드 예시도 제공할게.
+
+🧵 1. 스레드 생성/제어 관련 함수들
+함수	설명	반환값
+pthread_create	새 스레드 생성	성공: 0, 실패: 에러 코드
+pthread_exit	스레드 종료	없음 (void)
+pthread_join	특정 스레드 종료 대기	성공: 0
+pthread_detach	join하지 않고 스레드 리소스 자동 해제	성공: 0
+pthread_self	현재 실행 중인 스레드 ID 반환	pthread_t
+pthread_equal	두 스레드 ID 비교	같으면 1
+
+🔐 2. 뮤텍스 관련 함수 (pthread_mutex_*)
+함수	설명
+pthread_mutex_init	뮤텍스 초기화
+pthread_mutex_destroy	뮤텍스 제거
+pthread_mutex_lock	뮤텍스 잠금
+pthread_mutex_trylock	잠금 시도, 실패하면 바로 리턴
+pthread_mutex_unlock	잠금 해제
+
+기본적으로 스레드 간 공유 자원 접근 시 사용. 데드락 방지를 위해 신중하게 사용해야 함.
+
+⏱ 3. 조건 변수 (pthread_cond_*)
+함수	설명
+pthread_cond_init	조건 변수 초기화
+pthread_cond_destroy	조건 변수 제거
+pthread_cond_wait	조건 발생까지 대기 (잠깐 unlock + wait)
+pthread_cond_signal	대기 중인 스레드 하나 깨움
+pthread_cond_broadcast	대기 중인 모든 스레드 깨움
+
+뮤텍스와 함께 사용함. 상태 변화에 따라 스레드를 일시 정지하고 재개하는 데 유용.
+
+📊 4. 스레드 속성 제어 (pthread_attr_*)
+함수	설명
+pthread_attr_init	스레드 속성 객체 초기화
+pthread_attr_destroy	속성 객체 해제
+pthread_attr_setstacksize	스택 크기 지정
+pthread_attr_getstacksize	스택 크기 가져오기
+pthread_attr_setdetachstate	스레드 detach 여부 지정
+pthread_attr_getdetachstate	detach 여부 확인
+
+기본적으로 pthread_create 두 번째 인자에서 사용.
+
+🚦 5. 바리어(barrier), 읽기/쓰기 락 등
+함수	설명
+pthread_barrier_init	스레드들이 특정 시점에 동기화
+pthread_barrier_wait	바리어 도달 후 대기
+pthread_barrier_destroy	해제
+pthread_rwlock_init	읽기/쓰기 락 초기화
+pthread_rwlock_rdlock	읽기 잠금
+pthread_rwlock_wrlock	쓰기 잠금
+pthread_rwlock_unlock	락 해제
+pthread_rwlock_destroy	해제
+
+🧪 6. 예제 코드 (스레드 생성 ~ 동기화 전체 흐름)
+c
+Copy
+Edit
+#include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+
+#define NUM_THREADS 3
+
+pthread_mutex_t mutex;
+pthread_cond_t cond;
+int ready = 0;
+
+void *worker(void *arg) {
+    long tid = (long)arg;
+    pthread_mutex_lock(&mutex);
+
+    while (!ready) {
+        pthread_cond_wait(&cond, &mutex); // ready 될 때까지 대기
+    }
+
+    printf("스레드 %ld: 작업 시작\n", tid);
+    pthread_mutex_unlock(&mutex);
+    return NULL;
+}
+
+int main(void) {
+    pthread_t threads[NUM_THREADS];
+    pthread_mutex_init(&mutex, NULL);
+    pthread_cond_init(&cond, NULL);
+
+    for (long i = 0; i < NUM_THREADS; i++) {
+        pthread_create(&threads[i], NULL, worker, (void *)i);
+    }
+
+    sleep(2); // 작업 준비
+    pthread_mutex_lock(&mutex);
+    ready = 1;
+    pthread_cond_broadcast(&cond); // 모든 스레드 깨움
+    pthread_mutex_unlock(&mutex);
+
+    for (int i = 0; i < NUM_THREADS; i++) {
+        pthread_join(threads[i], NULL);
+    }
+
+    pthread_mutex_destroy(&mutex);
+    pthread_cond_destroy(&cond);
+
+    return 0;
+}
+✅ 요약 흐름
+pthread_create로 스레드 생성
+
+공유 자원 보호 시 pthread_mutex_* 사용
+
+상태 대기/신호는 pthread_cond_*
+
+종료 시 pthread_join 또는 pthread_detach
+
+필요 시 pthread_attr_*로 속성 설정
+
+다음이 궁금하다면:
+
+스레드풀 구조 설계
+
+TLS (Thread-local storage)
+
+데드락 예시 및 예방 전략
+
+리눅스 clone()과의 관계
+
+언제든지 말해줘.
+

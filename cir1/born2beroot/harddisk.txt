@@ -1,0 +1,163 @@
+전체 흐름 트리
+[물리 디스크] 
+   ↓ fdisk/parted
+[파티션 생성] 
+   ↓ pvcreate
+[물리 볼륨 (PV)]
+   ↓ vgcreate
+[볼륨 그룹 (VG)]
+   ↓ lvcreate
+[논리 볼륨 (LV)]
+   ↓ mkfs
+[파일시스템 생성]
+   ↓ mount
+[마운트]
+   ↓ /etc/fstab
+[자동 마운트]
+
+[용량 확장/축소]   lvextend/lvreduce + resize2fs
+
+1. 디스크 확인 및 파티션 생성
+lsblk                       # 디스크 및 파티션 구조 확인
+sudo fdisk /dev/sdb         # /dev/sdb에 파티션 생성
+# n → 새 파티션, w → 저장
+fdisk은 MBR 전용. 2TB 이상이면 parted 또는 gdisk 사용
+파티션 타입은 8e (Linux LVM)으로 설정해야 함
+
+2. 물리 볼륨(PV) 생성
+sudo pvcreate /dev/sdb1
+sudo pvs           # 요약 출력
+sudo pvdisplay     # 상세 정보 출력
+
+3. 볼륨 그룹(VG) 생성
+sudo vgcreate my_vg /dev/sdb1     # my_vg라는 이름의 VG 생성
+sudo vgs
+sudo vgdisplay
+추가 볼륨을 VG에 넣을 수도 있음:
+sudo vgextend my_vg /dev/sdc1
+
+4. 논리 볼륨(LV) 생성
+sudo lvcreate -L 5G -n my_lv my_vg  # 5GB 크기의 my_lv 생성
+sudo lvs
+sudo lvdisplay
+
+ 5. 파일시스템 생성
+sudo mkfs.ext4 /dev/my_vg/my_lv  # ext4 파일시스템 생성
+# 다른 예시: mkfs.xfs, mkfs.btrfs 등도 가능
+
+6. 마운트
+sudo mkdir /mnt/mydata
+sudo mount /dev/my_vg/my_lv /mnt/mydata
+df -h        # 마운트 확인
+
+7. 부팅 시 자동 마운트(fstab 설정)
+
+sudo blkid  # UUID 확인
+출력 예시:
+/dev/mapper/my_vg-my_lv: UUID="1234-5678-ABCD-XXXX" TYPE="ext4"
+
+sudo nano /etc/fstab
+내용 추가:
+UUID=1234-5678-ABCD-XXXX  /mnt/mydata  ext4  defaults  0  2
+
+저장 후 확인:
+sudo mount -a  # 오류 없는지 확인
+
+8. 논리 볼륨 확장
+
+LV 크기 확장 (파일시스템 포함)
+sudo lvextend -L +2G /dev/my_vg/my_lv     # 2GB 확장
+sudo resize2fs /dev/my_vg/my_lv           # ext4/xfs → 파일시스템 확장
+resize2fs는 ext 계열에만 사용 가능.
+
+xfs일 경우:
+sudo xfs_growfs /mnt/mydata
+9. 논리 볼륨 축소 (위험!)
+축소는 순서가 중요하며, 실수하면 데이터 손실 위험이 큼!
+
+sudo umount /mnt/mydata
+sudo e2fsck -f /dev/my_vg/my_lv            # 오류 검사
+sudo resize2fs /dev/my_vg/my_lv 3G         # 파일시스템 먼저 줄임
+sudo lvreduce -L 3G /dev/my_vg/my_lv       # LV 자체도 줄임
+sudo mount /dev/my_vg/my_lv /mnt/mydata
+
+추가 명령어 정리
+명령어	설명
+lsblk					디스크/파티션 구조 보기
+fdisk, parted				파티션 편집 도구
+pvcreate, pvremove			물리 볼륨 생성/제거
+vgcreate, vgextend, vgremove		볼륨 그룹 생성/확장/제거
+lvcreate, lvextend, lvreduce, lvremove	논리 볼륨 생성/확장/축소/제거
+mkfs.ext4, mkfs.xfs			파일시스템 생성
+resize2fs, xfs_growfs			파일시스템 확장
+e2fsck					ext 계열 파일시스템 체크
+mount, umount				마운트/해제
+blkid					UUID 확인
+df -h, lsblk, lvs, vgs, pv		s요약 보기
+
+
+1. 기본설정
+
+# 1. 디스크 확인
+lsblk
+
+# 2. 파티션 생성 (예: /dev/sdb)
+sudo fdisk /dev/sdb
+# → n (새 파티션), t (8e로 설정), w (저장)
+
+# 3. 물리 볼륨(PV) 생성
+sudo pvcreate /dev/sdb1
+
+# 4. 볼륨 그룹(VG) 생성
+sudo vgcreate my_vg /dev/sdb1
+
+# 5. 논리 볼륨(LV) 생성 (5GB)
+sudo lvcreate -L 5G -n my_lv my_vg
+
+# 6. 파일시스템 생성
+sudo mkfs.ext4 /dev/my_vg/my_lv
+
+# 7. 마운트할 디렉토리 생성
+sudo mkdir /mnt/mydata
+
+# 8. 마운트
+sudo mount /dev/my_vg/my_lv /mnt/mydata
+
+# 9. 자동 마운트 등록
+UUID=$(sudo blkid -s UUID -o value /dev/my_vg/my_lv)
+echo "UUID=$UUID /mnt/mydata ext4 defaults 0 2" | sudo tee -a /etc/fstab
+sudo mount -a  # 적용 테스트
+
+
+2. 용량확장
+
+# LV 확장
+sudo lvextend -L +2G /dev/my_vg/my_lv
+
+# 파일시스템 확장 (ext4일 경우)
+sudo resize2fs /dev/my_vg/my_lv
+
+# 확인
+df -h /mnt/mydata
+
+ext4가 아닌 xfs의 경우: sudo xfs_growfs /mnt/mydata
+
+
+3. 용량축소
+
+# 1. 마운트 해제
+sudo umount /mnt/mydata
+
+# 2. 파일시스템 검사
+sudo e2fsck -f /dev/my_vg/my_lv
+
+# 3. 파일시스템 축소
+sudo resize2fs /dev/my_vg/my_lv 3G
+
+# 4. LV 축소
+sudo lvreduce -L 3G /dev/my_vg/my_lv
+
+# 5. 다시 마운트
+sudo mount /dev/my_vg/my_lv /mnt/mydata
+
+파일시스템보다 LV를 먼저 줄이면 데이터 날아감! 반드시 순서 지킬 것!

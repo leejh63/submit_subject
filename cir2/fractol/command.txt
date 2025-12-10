@@ -1,0 +1,14 @@
+minilibx-linux.tgz 압출 풀고 풀어진 폴더 subject  폴더로 이동 make re && clear && ./fractol 인자1 인자2 인자3 인자4 인자5 // 인자 1에 따라 23, 2345 인지 결정
+화면크기가 인자23인데 조금 크면 렉걸림
+
+
+clear && 
+
+cc -Iminilibx-linux -Lminilibx-linux main2.c -lmlx_Linux -lXext -lX11 -lm -o fractol 
+
+&& ./fractol
+
+
+cc -Iminilibx-linux -Lminilibx-linux test_pixel.c -lmlx_Linux -lmlx -lXext -lX11 -lm -o pixel_put
+
+make re && clear && ./fractol m -0.4 0.6 1200 600

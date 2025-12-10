@@ -1,0 +1,193 @@
+
+먼저 데비안 iso를 웹에서 다운로드받음
+
+
+기본적으로 로그 확인의 경우 journalctl 옵션 | grep 옵션 을 통해서 가져올수있음
+
+0. 유저추가 및 그룹은 생략할거임
+
+1. 데비안, virtualbox 이용
+
+2. gui없이 진행 < 자원 많이 잡아먹고 비교적 비효율적임
+
+3. 하드 파티션 진행 / 암호화 까지 진행 // 운영체제 설치시도 가능하지만 명령어로도 가능함
+	파티션 진행 관련 추가내용 harddisk.txt
+   
+4. 운영체제 설치후 세팅 진행!
+	1- apt 업데이트
+	
+	2- sudo, libpam-pwquality, ssh, ufw, apparmor(apparmor-utils/profiles도 같이) 설치
+	
+	3- apparmor / apparmor 새로운 프로필 적용 방법 apparmor.txt확인
+		1)sudo aa-status
+		2)/etc/default/grub
+	    	   GRUB_CMDLINE_LINUX="... apparmor=1 security=apparmor" 추가 // 명시적 추가가 좋다고 함
+		3)sudo update-grub
+		4)sudo reboot
+		
+	4- ssh / Threehandshake 통해서 인증 / 공개키, 
+		1)ss -tulpn (옵션 설명 가능?) 
+		2)/etc/ssh/sshd_config.d/파일명.conf 파일 만들기
+		3)파일명.conf 에 Port 4242 / PermitRootLogin no
+		4)위 명령어들 은 man sshd_config 에서 확인가능
+		
+		참고.특정 유저만 접속 가능하게 설정가능
+		
+		sshd_config파일 일부 
+		
+		...
+		AllowUsers 유저1 유저2
+		
+		Match User 유저1
+			접속시 적용 룰1 
+		Match User 유저2
+			접속시 적용 룰1
+		...
+			
+		<127.0.0.1 or 10.12.17.1 아이피로 연결>
+		nat으로 적용 후 포트 포워딩 호스트 빈칸:4241 게스트 빈칸:4242 입력후 가상머신 작동시키면
+		호스트쪽에서 127.0.0.1 or 10.12.17.1 아이피로 접근 가능
+		주의할 점은 포트가 4242로 호스트쪽에 안열림 이유 모름 /
+		
+		<virbr0 아이피로 연결>
+		libvirt 또는 virt-manager용 가상 브리지
+		간단함 nat으로 적용 후 포트 포워딩 호스트 virbr0아이피:4242 게스트 빈칸:4242 입력후 가상머신 작동시키면
+		호스트쪽에서 virbr0 아이피로 접근 가능
+		다만, gpt피셜 잘못된 사용방법이라고함
+		
+		< vboxnet0아이피로 연결 >
+		버츄얼박스 도구에서 인터넷 만들고 활성화
+		일단 ifconfig -a 로 vboxnet0이거 있는지 확인 // virbr0이거는 libvirt 또는 virt-manager용 가상 브리지
+		문제는 vboxnet0에 inet 192.168.56.1  netmask 255.255.255.0  broadcast 192.168.56.255 이게 없음
+		즉 비활성화 상태
+		가상머신 네트워크에서 호스트 전용 어댑터로 적용 후 가상 머신 실행 > 에러남 
+		vboxdrv, vboxnetflt, vboxnetadp 등의 커널 모듈이 로드되지 않음 // 일단 vboxnetflt이게 없음 //재설치는 안해봄 귀찮음
+		ifconfig -a 실행 놀랍게도 vboxnet0에 inet 192.168.56.1  netmask 255.255.255.0  broadcast 192.168.56.255 이게 만들어짐
+		이후 nat으로 변경후 포트 포워딩 호스트 192.168.56.1:4242 게스트 빈칸:4242 입력후 가상머신 작동시키면
+		호스트쪽에서 192.168.56.1로 접근 가능
+		
+		
+		-참고
+		호스트 실행 python3 -m http.server 8888 // .: 현재디렉토리:포트8888에 서버열기
+		게스트에서 curl 패키지설키 후
+		curl http://192.168.56.1:8888/ 실행 시 현재 디렉토리 내용을 웹 형태로 출력함 
+	
+	5- ufw
+		추가내용 ufw.txt
+		/etc/ufw/before.rules 규칙 먼저 적용
+		/etc/ufw/user.rules 유저명령어로 입력된 규칙 적용 < 여기에 명령어로 입력한 규칙이 나와있음
+		/etc/ufw/after.rules 이후 규칙 적용
+		1)ufw default deny incoming / 기본값 들어오는거 거절
+		2)ufw default allow outgoing / 기본값 나가는거 허용
+		3)ufw allow 4242/tcp / 포트 허용
+			규칙삭제 의 경우 ufw delete allow 포트번호 이거 입력시 다 사라짐
+		4)systemctl start ufw / ufw 시작
+		5)systemctl status ufw / 확인
+		6)필요시 systemctl enable ufw / ufw status numbered / ufw status verbose
+	
+	6- sudo
+		권한 설정 명령 man suoders
+		권한 수정 및 변경 방법 sudo.txt 확인
+		1) 기본 설정/ /etc/sudo/sudoers.d에 넣어도 되고 (이건 비추)
+		   visudo 를 통해서 sudoers파일에 저장도 가능 함
+		   visudo의 경우 오타가 날때 잡아주지만 직접 넣는건 오타를 못잡고
+		   일반 유저가 sudo명령어 사용시 오류와 같이 비밀번호 입력창이 뜸 visudo사용권장!
+			Defaults	passwd_tries=3
+			Defaults	badpass_message="출력"
+			Defaults	log_input, log_output // 명령어뿐 아니라 입력/출력 전체를 기록
+			Defaults	logfile="/var/log/sudo" // 이건 과제에 명시됨 
+			Defaults	requiretty // tty 모드
+			// sudo로 접근가능한 경로 설정
+			Defaults        secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin"
+		2)usermod -aG sudo 유저이름 /sudo 유저 추가
+	
+	7- libpam-pwquality
+		권한 설정 명령 man pam_pwquality // man pam_succeed_if
+		0) /etc/login.defs
+			password 기간 설정
+			PASS_MAX_DAYS   99999
+			PASS_MIN_DAYS   0
+			PASS_WARN_AGE   7
+		참고
+		/etc/login.defs 파일은 리눅스 시스템에서 사용자 계정 생성 및 로그인 정책을 정의하는 전역 설정 파일입니다.
+			이 파일은 useradd, passwd, login 같은 명령어들이 사용할 기본값과 보안 정책들을 설정하는 데 사용됩니다.
+			/etc/login.defs에 담기는 주요 정보
+		항목	설명
+		PASS_MAX_DAYS	비밀번호 최대 사용일수 (예: 30 → 30일 후 만료)
+		PASS_MIN_DAYS	비밀번호 변경 최소 대기일 (예: 2 → 2일 이내 재변경 금지)
+		PASS_WARN_AGE	비밀번호 만료 경고일 (예: 7 → 만료 7일 전부터 경고)
+		UID_MIN, UID_MAX	일반 사용자 계정의 UID 범위
+		GID_MIN, GID_MAX	일반 그룹의 GID 범위
+		CREATE_HOME	useradd 시 홈 디렉토리 자동 생성 여부 (yes or no)
+		ENCRYPT_METHOD	비밀번호 해싱 알고리즘 (SHA512, MD5, 등)
+		LOGIN_RETRIES	로그인 시도 실패 허용 횟수 (지원 여부는 PAM에 따라 다름)
+		LOGIN_TIMEOUT	로그인 시 타임아웃 (초 단위)
+		UMASK	기본 파일 권한 마스크 설정 (ex. 022)
+		USERGROUPS_ENAB	사용자 삭제 시 관련 그룹도 삭제할지 여부
+		
+		1-0, 1-1중 하나 선택
+		1-0)/etc/security/pwquality.conf 에 설정 추가 // 이건 비추
+			dcredit = -1     # 숫자 1개 필수
+			ucredit = -1     # 대문자 1개 필수
+			lcredit = -1     # 소문자 1개 필수
+			....
+			기본 정책 적용후 /etc/pam.d/common-password을 1-1과 비슷하게 알맞게 수정
+			1-1)/etc/pam.d/common-password을 수정
+			- 바꿀려는 유저가 root일경우 한줄 스킵(success=1)// success=1 뿐만아니라 done 등 다양함 // user, uid 적용방법도 다양함
+			password        [success=1 default=ignore]      pam_succeed_if.so   user = root
+			password        requisite       pam_pwquality.so        enforce_for_root \
+												retry=3 \
+												dcredit=-1 ucredit=-1 ocredit=0 \
+												minlen=0
+			- 바꿀려는 유저가 root가 아닐 경우 한줄 스킵(success=1)
+			password        [success=1 default=ignore]      pam_succeed_if.so   user != root
+			password        requisite       pam_pwquality.so        enforce_for_root \
+												retry=3 \
+												dcredit=0 ucredit=0 ocredit=-1 \
+												minlen=0
+			>> 루트 유저와 일반 유저에게 다른 정책 적용 // 
+			참고. difok의 경우 루트로 로그인 할 경우 무시됨, 일반유저는 적용됨
+				passwd로 비밀번호 변경시 루트는 현재 비밀번호 요청 없이 바로 진행
+				하지만 일반유저의 경우 현재 비밀번호 요청 후 변경진행
+				> 즉, 루트는 이전 비밀번호를 모르기 때문에 difok적용이 불가
+	8- cron
+		0)which cron or systemctl status cron.service 안나오면 apt install cron
+		
+		1)크론 시작
+			sudo systemctl enable cron
+			sudo systemctl start cron
+		2)스크립트 준비
+			nano /경로/monitoring.sh / 파일 생성 / wall을 여기서 적용
+			chmod 700 /경로/monitoring.sh / 권한 설정
+		3) 둘 중에 하나 선택
+			3-1) crontab -e
+				*/10 * * * * /경로/monitoring.sh /추가 // 각각 분 시 일 월.. 의미 즉, 10분 의미
+			
+			3-2) nano /etc/cron.d/monitoring 등록 
+				monitoring 만들고 아래 내용
+				*/10 * * * * root /경로/monitoring.sh < 사용자 명시 필수/ 조건에 맞게 진행하면 될 듯
+		중지 및 비활성화
+			sudo systemctl disable cron
+			sudo systemctl stop cron
+		
+		주의. 
+		스크립트내부에 wall을 적용할 경우 3) 에서 wall 빼기
+		반대의 경우 .sh에 wall없다면
+		*/10 * * * * /경로/monitoring.sh | wall  << 이렇게 도 적용가능
+		
+		잠고. wall = write all users → 로그인 중인 모든 사용자 터미널에 메시지를 출력함.
+
+5. vdi 해쉬 진행
+	1- sha1sum 파일명
+		파일데이터 읽고 해쉬값 알려줌 그거 저장			
+
+
+
+
+
+
+
+
+
+
+

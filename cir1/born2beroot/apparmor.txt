@@ -1,0 +1,222 @@
+1. appaamor, ~-profiles/utils 다운
+2. ss-status 확인
+3. 테스트 위한 스크립트 및 파일 작성 (실행 권한 755)
+
+스크립트 경로설정을 opt/aatest/aatest/sh 으로 결정함
+스크립트내용 예시
+echo "can cat"
+cat /opt/aatest/pass.txt
+
+echo "can't cat"
+cat /opt/aatest/fail.txt
+
+4. nano /etc/apparmor.d/opt.aatest.aatest.sh 만들기 / 프로필만들기
+
+##(여기서 그냥 규칙 설정가능!) logprof안쓸 경우
+규칙 설정후 apparmor_parser -r /etc/apparmor.d/opt.aatest.aatest.sh 실행해야함
+
+기본 프로필 규칙 기본 골격----------  
+#include <tuntables/global> 주의 기본 변수 선언의 경우 {}블록 외부에 진행 그리고 # 붙여야함 
+
+/opt/aatest/aatest.sh {
+주의 권한 선언의 경우 블록 내부에 선언 // 외부에도 가능하다고는하지만 에러발생했음 그리고 # 없이 진행
+include <abstractions/base>
+include <abstractions/bash>
+
+/opt/aatest/aatest.sh r,
+/opt/aatest/pass.txt r,
+
+deny /opt/aatest/fail.txt r,
+}
+--------------------------------------
+
+5. aa-complian /etc/apparmor.d/opt.aatest.aatest.sh / 먼저 컴플레인 모드에서 스크립트실행 로그 모은다
+
+6. 스크립트 수차례실행
+
+7. journalctl -k | grep -E 'apparmor="ALOWED|apparmor="DENIED' > /로그 경로
+   (apparmor="ALLOWED" 또는 apparmor="DENIED" 형태로 나타나는 텍스트를 찾기 위한 것)
+      즉 > apparmor="ALLOWED 또는 apparmor="DENIED 
+       > apparmor="ALOWED | apparmor="DENIED
+
+8. aa-logprof -f /로그경로 /// 로그를 기반으로 규칙을 설정해줌
+
+설정진행
+
+새로운 접근 요청 처리 옵션:
+
+(A)llow: 해당 접근을 허용하고 프로필에 추가
+
+(D)eny: 해당 접근을 명시적으로 거부
+
+(G)lob: 경로를 와일드카드로 일반화하여 허용 (예: /home/user/* 형태)
+
+(N)ew: 새 로컬 프로필 생성
+
+(S)imilar: 유사한 경로에 대한 접근도 함께 허용
+
+(I)nherit: 상속 실행 권한 부여
+
+(P)rofile: 프로필 전환 실행 권한 부여
+
+(U)nconfined: 제한 없이 실행 권한 부여
+
+(C)hildren: 자식 프로세스에 대한 설정
+
+(A)bort: 변경 사항 취소 및 종료
+
+(F)inish: 변경 사항 저장 및 종료
+
+권한 유형 선택 옵션:
+
+r (read): 읽기 권한
+
+w (write): 쓰기 권한
+
+x (execute): 실행 권한
+
+m (memory map): 메모리 매핑 권한
+
+k (lock): 파일 잠금 권한
+
+l (link): 링크 권한
+
+9. aa-enforce /etc/apparmor.d/opt.aatest.aatest.sh // 컴플레인 모드에서 강제모드로
+
+10. 스크립트실행 / 권한에 맞게 실행 확인
+
+--------------------------------------------------------
+
+AppArmor 적용 방법 정리
+기본 개념
+AppArmor는 리눅스 보안 모듈로, 프로그램의 권한을 제한하여 시스템 보안을 강화하는 MAC(Mandatory Access Control) 시스템입니다. 기존 리눅스의 DAC(Discretionary Access Control)와 달리, 프로그램별로 세부적인 접근 제어를 설정할 수 있습니다.
+
+작동 방식
+프로필 기반 제어: 각 프로그램마다 프로필을 생성하여 접근 권한 정의
+
+경로 기반 제어: 파일 경로를 기준으로 접근 권한 설정
+
+모드: complain(위반 로깅만), enforce(위반 차단 및 로깅)
+
+지금까지 진행한 작업 정리
+1. 설치 및 기본 설정
+AppArmor 및 관련 유틸리티 설치
+
+apt install apparmor apparmor-profiles apparmor-utils
+현재 상태 확인
+
+aa-status
+2. 테스트 환경 구성
+테스트용 스크립트 및 파일 생성 (권한 755)
+
+# /opt/aatest/aatest.sh 내용
+echo "can cat"
+cat /opt/aatest/pass.txt
+
+echo "can't cat"
+cat /opt/aatest/fail.txt
+3. 프로필 생성 및 설정
+프로필 파일 생성
+
+text
+nano /etc/apparmor.d/opt.aatest.aatest.sh
+기본 프로필 구조 작성
+
+text
+#include <tunables/global>
+/opt/aatest/aatest.sh {
+    include <abstractions/base>
+    include <abstractions/bash>
+
+    /opt/aatest/aatest.sh    r,
+    /opt/aatest/pass.txt      r,
+
+    deny /opt/aatest/fail.txt r,
+}
+4. 프로필 컴파일 및 적용
+프로필 컴파일
+
+text
+aa-complain /etc/apparmor.d/opt.aatest.aatest.sh
+스크립트 실행 테스트
+
+5. 로그 분석 및 프로필 개선
+AppArmor 로그 수집
+
+text
+journalctl -k | grep -E 'apparmor="ALLOWED|apparmor="DENIED' > /로그경로
+apparmor="ALLOWED" 또는 apparmor="DENIED" 형태로 나타나는 텍스트를 찾기 위한 것
+즉 >apparmor="ALLOWED 또는 apparmor="DENIED
+> apparmor="ALOWED | apparmor="DENIED
+
+로그 기반 프로필 개선
+
+text
+aa-logprof -f /로그경로
+6. 강제 모드 적용 및 검증
+프로필을 enforce 모드로 전환
+
+text
+aa-enforce /etc/apparmor.d/opt.aatest.aatest.sh
+스크립트 실행하여 권한 제한 검증
+
+AppArmor 단계별 심화 학습
+1단계: 기본 프로필 이해
+#include <tunables/global>: 전역 변수 포함
+
+include <abstractions/base>: 기본 추상화 규칙 포함
+
+권한 표기: r(읽기), w(쓰기), x(실행), m(메모리 매핑), k(잠금), l(링크)
+
+2단계: 프로필 모드 관리
+aa-complain: 위반 사항 로깅만 (학습 모드)
+
+aa-enforce: 위반 사항 차단 및 로깅 (실제 적용 모드)
+
+aa-disable: 프로필 비활성화
+
+3단계: 로그 분석 및 프로필 개선
+aa-logprof: 로그 기반 프로필 개선 도구
+
+접근 요청 처리 옵션:
+
+(A)llow: 접근 허용
+
+(D)eny: 접근 거부
+
+(G)lob: 와일드카드로 일반화
+
+(N)ew: 새 프로필 생성
+
+(S)imilar: 유사 경로 함께 허용
+
+기타: (I)nherit, (P)rofile, (U)nconfined, (C)hildren, (A)bort, (F)inish
+
+4단계: 고급 프로필 작성
+변수 사용: @{HOME}, @{PROC}
+
+패턴 매칭: *, **, ?, []
+
+하위 프로필 및 프로필 전환
+
+네트워크 접근 제어
+
+5단계: 시스템 통합
+시스템 서비스 프로필 관리
+
+부팅 시 자동 적용 설정
+
+다른 보안 시스템과의 통합 (SELinux, TOMOYO 등)
+
+실무 팁
+항상 complain 모드에서 충분히 테스트 후 enforce 모드로 전환
+
+정기적인 로그 분석으로 프로필 개선
+
+중요 서비스부터 점진적으로 적용
+
+백업 및 롤백 계획 마련
+
+aa-genprof를 사용한 자동 프로필 생성 고려 // 이거의 경우 sysrog?? ryslog? 이게 필요하다고함 근데 귀찮아서 journalctl로 진행함
+
+AppArmor는 리눅스 시스템의 보안을 강화하는 강력한 도구이며, 단계적 접근을 통해 안정적으로 적용할 수 있습니다.

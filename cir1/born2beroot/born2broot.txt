@@ -1,0 +1,319 @@
+
+!borntoberoot 메모장!
+리눅스 시스템 관리 개념 정리
+1. 가상화 기술
+
+
+가상화의 경우 두가지 존재
+1. 프로세스 가상화
+2. 시스템 가상화
+
+가상머신
+
+버츄얼박스(VirtualBox): Oracle에서 개발한 x86 및 AMD64/Intel64 가상화 솔루션. 호스트 OS 위에서 게스트 OS를 실행
+KVM(Kernel-based Virtual Machine): 리눅스 커널을 하이퍼바이저로 전환하는 가상화 인프라. 하드웨어 지원 가상화 기술(Intel VT-x, AMD-V) 필요
+
+컨테이너
+
+도커(Docker), LXC 등: 호스트 OS 커널을 공유하면서 프로세스를 격리 실행
+가상머신과 차이점: 컨테이너는 OS 전체를 가상화하지 않고 필요한 라이브러리와 응용 프로그램만 포함하여 가볍고 빠름
+
+2. 디스크 관리
+파티션
+
+물리 파티션: 물리적 디스크를 논리적으로 분할한 영역
+주요 명령어: fdisk, parted, gdisk
+
+LVM(Logical Volume Manager)
+
+물리 볼륨(PV, Physical Volume): LVM에 사용될 물리적 파티션/디스크
+볼륨 그룹(VG, Volume Group): 물리 볼륨을 묶은 단위
+논리 볼륨(LV, Logical Volume): 볼륨 그룹에서 할당된 논리적 공간
+주요 명령어: pvcreate, vgcreate, lvcreate, lvextend
+
+파일시스템 및 마운트
+
+파일시스템 유형: ext4, xfs, btrfs 등
+마운트: 파일시스템을 디렉토리 트리에 연결하는 과정
+fstab: /etc/fstab 파일에 마운트 정보 영구 저장
+주요 명령어: mkfs, mount, umount
+
+GRUB(GRand Unified Bootloader)
+
+부트로더: 시스템 부팅 시 커널을 로드하는 프로그램
+설정 파일: /etc/default/grub, /boot/grub/grub.cfg
+주요 명령어: update-grub, grub-install
+
+3. 사용자 및 권한 관리
+사용자 및 그룹
+
+UID(User ID): 사용자 식별 번호
+GID(Group ID): 그룹 식별 번호
+주요 파일: /etc/passwd, /etc/group, /etc/shadow
+주요 명령어: useradd, usermod, userdel, groupadd, groupmod, id
+
+권한
+
+파일 권한: 읽기(r), 쓰기(w), 실행(x)
+특수 권한: SetUID, SetGID, Sticky bit
+주요 명령어: chmod, chown, chgrp
+
+4. PAM(Pluggable Authentication Modules)
+
+역할: 인증, 계정, 세션, 비밀번호 관리를 위한 모듈식 프레임워크
+설정 파일: /etc/pam.d/ 디렉토리 내 서비스별 파일
+주요 모듈:
+
+pam_unix.so: 기본 UNIX 인증
+pam_limits.so: 사용자 리소스 제한
+pam_cracklib.so: 비밀번호 강도 검사
+
+
+
+5. 네트워크 및 SSH
+네트워크 인터페이스
+
+물리 인터페이스: eth0, ens33 등
+브리지: 두 네트워크 세그먼트를 연결하는 가상 인터페이스
+IP 할당 방식:
+
+고정 IP: /etc/network/interfaces 또는 /etc/netplan/
+DHCP: Dynamic Host Configuration Protocol, 자동 IP 할당
+
+
+
+TCP/IP 연결
+
+3-way Handshake:
+
+SYN: 클라이언트가 연결 요청
+SYN+ACK: 서버가 연결 요청 수락
+ACK: 클라이언트가 수락 확인
+
+
+TCP vs UDP:
+
+TCP: 연결 지향, 신뢰성 보장, 순서 보장
+UDP: 비연결 지향, 빠르지만 신뢰성 낮음
+
+
+
+SSH
+
+개념: Secure Shell, 암호화된 원격 접속 프로토콜
+설정 파일:
+
+/etc/ssh/ssh_config: 클라이언트 전역 설정
+/etc/ssh/sshd_config: 서버 설정
+.d 확장: 디렉토리(directory)를 의미, 여러 설정 파일 모듈화
+
+
+주요 명령어: ssh, scp, sftp, ssh-keygen
+키 인증: ~/.ssh/authorized_keys에 공개키 등록
+
+6. 방화벽
+UFW(Uncomplicated Firewall)
+
+개념: iptables의 사용하기 쉬운 프론트엔드
+주요 명령어:
+
+ufw enable/disable: 방화벽 활성화/비활성화
+ufw allow/deny: 포트/서비스 허용/차단
+ufw status: 상태 확인
+
+
+SSH와 차이점: SSH는 원격 접속 프로토콜, UFW는 방화벽 관리 도구
+
+로그 확인
+
+SSH 로그: /var/log/auth.log
+UFW 로그: /var/log/ufw.log
+모니터링 명령어: journalctl -kf | grep -E 'UFW|sshd'
+
+7. Cron 및 작업 스케줄링
+
+개념: 시스템에서 주기적으로 작업을 실행하는 데몬
+설정 파일:
+
+/etc/crontab: 시스템 크론 작업
+/var/spool/cron/crontabs/: 사용자별 크론 작업
+
+
+형식: 분 시 일 월 요일 명령어
+주요 명령어: crontab -e, crontab -l
+
+8. TTY 및 터미널
+
+TTY(TeleTYpewriter): 물리적 콘솔/가상 콘솔(tty1~tty6)
+PTS(Pseudo Terminal Slave): SSH, 터미널 에뮬레이터를 통한 가상 터미널
+확인 명령어: tty, who
+
+9. 시스템 모니터링
+Journalctl
+
+개념: systemd 저널 로그 관리 도구
+주요 옵션:
+
+-f: 실시간 로그 확인
+-u: 특정 유닛 로그 확인
+-k: 커널 로그 확인
+
+
+
+ss 명령어
+
+개념: 소켓 통계 확인 도구 (netstat 대체)
+주요 옵션:
+
+-t: TCP 소켓
+-p: 프로세스 정보
+-l: 리스닝 소켓
+-u: UDP 소켓
+-n: 포트 번호로 표시
+
+
+
+10. Sudo 설정
+
+개념: 일반 사용자가 루트 권한으로 명령 실행
+설정 파일:
+
+/etc/sudoers: 기본 설정 파일
+/etc/sudoers.d/: 추가 설정 디렉토리
+
+
+형식: 사용자 호스트=(실행사용자) 명령어
+주요 옵션:
+
+NOPASSWD: 비밀번호 없이 실행
+ALL: 모든 명령/사용자/호스트 허용
+
+
+
+11. 시스템 모니터링 스크립트 분석
+-----------------------------------------------------------------------
+#!/bin/bash
+
+# Date & Banner
+DATE=$(date '+%Y-%m-%d %H:%M:%S')
+HOSTNAME=$(hostname)
+REPORT="=== System Monitoring Report ($DATE) ===\n"
+
+# Architecture
+ARCHITECTURE=$(uname -a)
+REPORT+="#Architecture: $ARCHITECTURE\n"
+
+# Physical CPU (socket 수)
+PHYSICAL_CPU=$(lscpu | grep "^Socket(s):" | awk '{print $2}')
+REPORT+="#CPU physical: $PHYSICAL_CPU\n"
+
+# Virtual CPU (논리 CPU 수)
+VCPU=$(nproc)
+REPORT+="#vCPU: $VCPU\n"
+
+# Memory Usage
+MEM_TOTAL=$(free -m | awk '/^Mem:/ {print $2}')
+MEM_USED=$(free -m | awk '/^Mem:/ {print $3}')
+MEM_PERCENT=$(awk "BEGIN {printf \"%.2f\", $MEM_USED / $MEM_TOTAL * 100}")
+REPORT+="#Memory Usage: ${MEM_USED}/${MEM_TOTAL}MB (${MEM_PERCENT}%)\n"
+
+# Disk Usage
+DISK_USED=$(df -P | awk 'NR>1 {sum+=$3} END {print sum}')
+DISK_TOTAL=$(df -P | awk 'NR>1 {sum+=$2} END {print sum}')
+DISK_USED_MB=$((DISK_USED / 1024))
+DISK_TOTAL_GB=$(awk "BEGIN {printf \"%.0f\", $DISK_TOTAL / 1024 / 1024}")
+DISK_PERCENT=$(awk "BEGIN {printf \"%.0f\", $DISK_USED / $DISK_TOTAL * 100}")
+REPORT+="#Disk Usage: ${DISK_USED_MB}/${DISK_TOTAL_GB}GB (${DISK_PERCENT}%)\n"
+
+# CPU Load
+CPU_IDLE=$(top -bn1 | grep "Cpu(s)" | grep -Po '[0-9.]+(?= id)')
+CPU_LOAD=$(awk "BEGIN {printf \"%.1f\", 100 - $CPU_IDLE}")
+REPORT+="#CPU load: $CPU_LOAD%\n"
+
+# Last Boot
+LAST_BOOT=$(who -b | awk '{print $3, $4}')
+REPORT+="#Last boot: $LAST_BOOT\n"
+
+# LVM Use
+LVM_USE=$(lsblk | grep -q "lvm" && echo "yes" || echo "no")
+REPORT+="#LVM use: $LVM_USE\n"
+
+# TCP Connections
+TCP_CONN=$(ss -t state ESTABLISHED | grep -v "Recv-Q" | wc -l)
+REPORT+="#Connections TCP: $TCP_CONN ESTABLISHED\n"
+
+# User log
+USER_LOG=$(who | wc -l)
+REPORT+="#User log: $USER_LOG\n"
+
+# Network
+IP_ADDR=$(hostname -I | awk '{print $1}')
+MAC_ADDR=$(ip link | awk '/ether/ {print $2; exit}')
+REPORT+="#Network: IP $IP_ADDR ($MAC_ADDR)\n"
+
+# Sudo Commands
+SUDO_COUNT=$(journalctl _COMM=sudo | grep "COMMAND=" | wc -l)
+REPORT+="#Sudo: $SUDO_COUNT cmd\n"
+
+# 출력
+echo -e "$REPORT" | wall
+
+
+시스템·시간 date '+%Y-%m-%d %H:%M:%S' 현재 시각을 지정 포맷(YYYY-MM-DD HH:MM:SS)으로 출력 보고서 타임스탬프
+hostname 호스트 이름 조회 배너·네트워크 섹션
+커널·아키텍처 uname -a 커널 이름·릴리스·머신 하드웨어 등 전체 정보 시스템 아키텍처 표시
+CPU lscpu CPU 토폴로지·플래그 등 조회 소켓 개수 계산
+nproc 이용 가능한 논리 CPU 수 vCPU 개수
+메모리 free -m 메모리 통계(MB) 출력 총/사용량 계산
+디스크 df -P POSIX 스타일 파일시스템 사용량 전체 디스크 합산
+부하 top -b -n 1 1회(batch) 모드 상단 프로세스·CPU 통계 idle% 추출
+grep -Po Perl RegEx, 매칭 부분만(print-only) id 값만 추출
+부팅 who -b 마지막 부팅 시각 #Last boot 항목
+LVM lsblk 블록 디바이스 트리·속성 LVM 볼륨 존재 여부
+네트워크 ss -t state ESTABLISHED TCP 소켓 상태 조회 활성화된 연결 수
+hostname -I 모든 IPv4/IPv6 주소(공백 구분) 첫 번째 IP 선택
+ip link 네트워크 링크·MAC 주소 조회 첫 번째 NIC MAC
+사용자 who 로그인 세션 정보 현재 로그인 인원
+감사 journalctl _COMM=sudo systemd 저널에서 sudo 프로세스 필터 sudo 명령 횟수
+기타 wall 모든 로그인 TTY에 메시지 브로드캐스트 10 분마다 리포트 송출
+파이프·필터 grep, awk, wc -l, 배시 산술/awk "BEGIN{...}" 표준 입력 가공·합산·형식화 각 항목 계산·퍼센트 변환
+-------------------------------------------------------------------------------
+
+12. SHA1 및 해시
+해시(Hash)
+
+개념: 데이터를 고정 길이의 값으로 변환하는 단방향 함수
+특징: 동일 입력 → 동일 출력, 역변환 불가능
+용도: 무결성 검증, 비밀번호 저장
+
+주요 해시 알고리즘
+
+MD5: 128비트, 취약점 발견됨
+SHA-1: 160비트, 취약점 발견됨
+SHA-256/SHA-512: 256/512비트, 현재 널리 사용됨
+해시 확인 명령어: sha1sum, md5sum, sha256sum
+
+암호화 vs 해시
+
+암호화(Encryption): 키를 사용해 양방향 변환 가능
+해시(Hash): 단방향 변환, 복원 불가
+주요 암호화 알고리즘: AES, RSA, DES
+
+부가 정보
+로그 관련 명령어
+
+방화벽 및 SSH 로그: journalctl -kf | grep -E 'UFW|sshd'
+sudo 로그: journalctl -f _COMM=sudo
+
+비밀번호 초기화 방법
+
+부팅 시 ESC 또는 Shift 키 누름
+GRUB 메뉴에서 부팅 항목 선택 후 'e' 키 누름
+Linux 커널 라인 찾아 끝에 rw init=/bin/bash 추가
+
+rw: 루트 파일시스템을 읽기/쓰기로 마운트
+init=/bin/bash: systemd 대신 bash로 직접 부팅
+
+
+Ctrl+X로 저장 후 부팅
+passwd root 명령으로 루트 비밀번호 변경

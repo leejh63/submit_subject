@@ -1,0 +1,111 @@
+
+cc -g -Wall -Wextra -Werror -I. re_push_swap.c -L. -lftprintf -o push_swap
+ARG=$(python3 rand.py 10) && echo $ARG && ./push_swap $ARG
+./push_swap "1 2 3 4 5 6 7 8 9"
+./push_swap 1 2 3 4 5 6 7 8 9
+valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes ./push_swap <인자들>
+
+
+
+
+
+int	sort_two_b(t_stack **ahead, t_stack **bhead)
+{
+	long long a_top;
+	long long b_top;
+
+	a_top = (*ahead)->num;
+	b_top = (*bhead)->num;
+	pb(ahead, bhead);
+	if (a_top < b_top)
+		sb(bhead);
+	return (2);
+}
+
+
+int	sort_two_b(t_stack **ahead, t_stack **bhead, long long *b_table)
+{
+	long long a_top;
+
+	a_top = (*ahead)->num;
+	pb(ahead, bhead);
+	if (a_top > b_table[1])
+		sb(bhead);
+	return (2);
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+시작
+정렬테이블 가운데
+
+a 4 12 14 2 9 15 5 3 8 10 1 11 13 7 6
+b 
+
+3 9 44 7 50 40 33 1 21 26 42 38 49 10 32 8 34 4 17 43 30 27 12 14 39 35 16 20 5 25 13 28 31 36 47 22 19 15 45 37 46 18 29 2 6 11 41 24 23 48
+정렬 테이블 테이블크기 tind
+0	1	2	3	4	5	6	7	8	9	10	11	12	13	14	15	16	17	18	19	20	21	22	23	
+
+
+stack b테이블 최대 갯수 + 1 개 (초기 최솟값 -1 로 채워짐) b크기 nb
+0	1	2	3	4	5	6	7	8	9	10	11	12	13	14	15
+7	3	9	-1
+
+일단 초기화 tindleft = 0
+tindleft = tindleft + (tind - tindleft)/2 피벗 = atable[tindleft] 
+(8)비교 작은값 1개 ra pb
+2개 크기 비교 atop > btop >> pb
+		아니면  >> pb sb
+3개atop / btop 비교  btop가 작다 > pb
+			btop가 크다 > sb 
+				다시 비교 btop 가 크다 > sb pb
+						    작다 > pb
+
+
+ b테이블 초기화 "테이블 크기"도 같이초기화
+
+a 3 8 10 1 11 13 7 6 12 14
+b 5 4 2
+while 얼마큼 돌려야 하는가? nb 크기가  피벗이 된다면 펑
+피벗 (12)비교 작다 같다 > b테이블 확인 >> 
+i = 0 부터//
+b[i] > b[i+1] >> b[i+1]이 최솟값 - 1               >> pb 테이블 갱신continue?
+
+		    b[i] > atop > b[i+1] 이거라면 >> i와 i+1 사이 삽입
+								i+1 비교 nb-(i+1)//
+								i+1이 같다 작다 >> rb * (i+1) pb
+								nb-(i+1) 작다 >> rrb * (nb-(i+1)) pb
+								테이블 갱신
+						 아니라면>> 사이값이 아니다 i+1
+b[i] < b[i+1] >> (b[i+1] < atop | b[i] > atop ) >> 
+						i와 i+1 사이 삽입
+						i+1 비교 nb-(i+1)//
+						i+1이 같다 작다 >> rb * (i+1) pb
+						nb-(i+1) 작다 >> rrb * (nb-(i+1)) pb
+						테이블 갱신
+
+		     아니라면 >> i + 1
+				
+				
+
+	    크다 > ra
+
+위에 반복// 단 a에 3개 가남는다면 a정렬후 b테이블 확인 i = 0 부터 nb 까지?//
+>> b[i] < b[i+1] 이 존재 
+			i+1 비교 nb-(i+1)//
+			i+1이 같다 작다 >> rb * (i+1)
+			nb-(i+1) 작다 >> rrb * (nb-(i+1))
+이후에 > b가 없을 때까지 pa 

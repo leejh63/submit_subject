@@ -1,0 +1,65 @@
+typedef t_stack s_stack
+{
+    struct s_stack	*next;
+	long long			num;
+}	t_stack;
+
+t_stack	*new_num(long long num)
+{
+	t_stack	*new;
+
+	new = malloc(sizeof(t_stack));
+	if (!new)
+		return (NULL);
+	new -> next = NULL;
+	new -> num = num;
+	return (new);
+}
+
+void	add_f(t_stack **head, t_stack *new)
+{
+	//널처리
+	if (!*head)
+	{
+		new -> next = NULL;
+		*head = new;
+		return ;
+	}
+	new -> next = *head;
+	*head = new;
+	return ;
+}
+
+void	add_b(t_stack **head, t_stack *new)
+{
+    t_stack back;
+
+    if (!*head)
+        return (addf(head, new));
+    back = (*head);
+    while (back -> next)
+        back = back -> next;
+    back -> next = new;
+    new -> next = NULL;
+    return ;
+}
+
+t_stack *det_f(t_stack **head)
+{
+    t_stack *def;
+
+    def = (*head);
+    if (def -> next)
+        (*head) = (*head)-> next;
+    else
+        (*head)=NULL;
+    return (def); 
+}
+
+t_stack *det_b(t_stack **head)
+{
+    t_stack *deb;
+
+    deb = (*head);
+    
+}
