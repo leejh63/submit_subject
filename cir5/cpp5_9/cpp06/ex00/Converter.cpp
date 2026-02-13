@@ -15,6 +15,7 @@
 #include <cctype>
 #include <limits>
 #include <cstdlib>
+#include <cmath>
 #include <iomanip>
 
 namespace {

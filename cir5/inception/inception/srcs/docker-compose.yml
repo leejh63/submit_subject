@@ -1,0 +1,91 @@
+services:
+  mariadb:
+    image: mariadb:inception
+    build:
+      context: requirements/mariadb
+    env_file:
+      - .env
+    secrets:
+      - db_root_password
+      - db_password
+    volumes:
+      - type: volume
+        source: mariadb_data
+        target: /var/lib/mysql
+        volume:
+          nocopy: true
+    networks:
+      - inception
+    restart: unless-stopped
+
+  wordpress:
+    image: wordpress:inception
+    build:
+      context: requirements/wordpress
+    env_file:
+      - .env
+    secrets:
+      - db_password
+      - wp_admin_password
+      - wp_user_password
+    depends_on:
+      - mariadb
+    volumes:
+      - type: volume
+        source: wordpress_data
+        target: /var/www/html
+        volume:
+          nocopy: true
+    networks:
+      - inception
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:inception
+    build:
+      context: requirements/nginx
+    env_file:
+      - .env
+    depends_on:
+      - wordpress
+    ports:
+      - "443:443"
+    volumes:
+      - type: volume
+        source: wordpress_data
+        target: /var/www/html
+        read_only: true
+        volume:
+          nocopy: true
+    networks:
+      - inception
+    restart: unless-stopped
+
+secrets:
+  db_root_password:
+    file: ../secrets/db_root_password.txt
+  db_password:
+    file: ../secrets/db_password.txt
+  wp_admin_password:
+    file: ../secrets/wp_admin_password.txt
+  wp_user_password:
+    file: ../secrets/wp_user_password.txt
+
+networks:
+  inception:
+    driver: bridge
+
+volumes:
+  mariadb_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /home/jaeholee/data/mariadb
+
+  wordpress_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /home/jaeholee/data/wordpress
