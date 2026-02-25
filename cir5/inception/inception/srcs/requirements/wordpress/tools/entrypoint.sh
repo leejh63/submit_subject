@@ -58,19 +58,36 @@ chown -R www-data:www-data "${WEBROOT}" 2>/dev/null || true
 # 2) wait for DB
 # ----------------------------
 log "waiting for mariadb (${DB_HOST}:${DB_PORT}) via PHP mysqli..."
+
 i=0
 while :; do
-  php -r "
-    \$m = @new mysqli('${DB_HOST}', '${MYSQL_USER}', '${DB_PW}', '${MYSQL_DATABASE}', ${DB_PORT});
-    if (\$m->connect_errno) { exit(1); }
-    \$m->close(); exit(0);
-  " >/dev/null 2>&1 && break
+  DB_HOST_ENV="${DB_HOST}" \
+  DB_USER_ENV="${MYSQL_USER}" \
+  DB_PASS_ENV="${DB_PW}" \
+  DB_NAME_ENV="${MYSQL_DATABASE}" \
+  DB_PORT_ENV="${DB_PORT}" \
+  php -r '
+    $host = getenv("DB_HOST_ENV");
+    $user = getenv("DB_USER_ENV");
+    $pass = getenv("DB_PASS_ENV");
+    $db   = getenv("DB_NAME_ENV");
+    $port = (int)getenv("DB_PORT_ENV");
+
+    $m = @new mysqli($host, $user, $pass, $db, $port);
+    if ($m->connect_errno) {
+        exit(1);
+    }
+    $m->close();
+    exit(0);
+  ' >/dev/null 2>&1 && break
 
   i=$((i+1))
-  [ "$i" -lt 60 ] || die "mariadb not reachable/auth failed after 60s"
+  [ "$i" -lt 30 ] || die "mariadb not reachable/auth failed after 30s"
   sleep 1
 done
+
 log "mariadb ok"
+
 
 # ----------------------------
 # 3) wp-config.php create (if missing)
@@ -88,26 +105,34 @@ if [ ! -f "${WEBROOT}/wp-config.php" ]; then
 fi
 
 # ----------------------------
-# 4) install WP if not installed
-#    IMPORTANT: run wp-cli as www-data, but secrets are root-only -> pass via env
+# 4) install WP if not installed (DEBUG)
 # ----------------------------
+
+# DEBUG VERSION
+#      echo \"=== DEBUG ENV (ADMIN) ===\"
+#      env | grep APW || true
+#      echo \"APW=\$APW\"
 if ! su -s /bin/sh www-data -c "wp core is-installed --path='${WEBROOT}' --url='${URL}'" >/dev/null 2>&1; then
   log "wp not installed -> installing"
+
   su -s /bin/sh www-data -c "
     env APW='${WP_ADMIN_PW}' \
-    wp core install \
-      --quiet \
-      --path='${WEBROOT}' \
-      --url='${URL}' \
-      --title='${WP_TITLE}' \
-      --admin_user='${WP_ADMIN_USER}' \
-      --admin_password=\"\$APW\" \
-      --admin_email='${WP_ADMIN_EMAIL}' \
-      --skip-email
+    sh -c '
+      wp core install \
+        --path=\"${WEBROOT}\" \
+        --url=\"${URL}\" \
+        --title=\"${WP_TITLE}\" \
+        --admin_user=\"${WP_ADMIN_USER}\" \
+        --admin_password=\"\$APW\" \
+        --admin_email=\"${WP_ADMIN_EMAIL}\" \
+        --skip-email
+    '
   "
+
 else
   log "wp already installed"
 fi
+
 
 # ----------------------------
 # 4.5) comment auto-approve (assignment / dev mode)
@@ -122,25 +147,36 @@ su -s /bin/sh www-data -c "
 
 
 # ----------------------------
-# 5) create normal user if missing
+# 5) create normal user if missing (DEBUG)
 # ----------------------------
+
+# DEBUG VERSION
+#      echo \"=== DEBUG ENV (ADMIN) ===\"
+#      env | grep APW || true
+#      echo \"APW=\$APW\"
 if ! su -s /bin/sh www-data -c "wp user get '${WP_USER}' --field=ID --path='${WEBROOT}' --url='${URL}'" >/dev/null 2>&1; then
-  log "creating user: ${WP_USER} (${WP_USER_EMAIL})"
+  log "creating user (DEBUG user pw env): ${WP_USER} (${WP_USER_EMAIL})"
+
   su -s /bin/sh www-data -c "
     env UPW='${WP_USER_PW}' \
-    wp user create \
-      '${WP_USER}' '${WP_USER_EMAIL}' \
-      --user_pass=\"\$UPW\" \
-      --role=subscriber \
-      --path='${WEBROOT}' \
-      --url='${URL}'
-  " || true
+    sh -c '
+      wp user create \
+        \"${WP_USER}\" \"${WP_USER_EMAIL}\" \
+        --user_pass=\"\$UPW\" \
+        --role=subscriber \
+        --path=\"${WEBROOT}\" \
+        --url=\"${URL}\"
+    '
+  "
+
 else
   log "user already exists: ${WP_USER}"
 fi
+
+
 
 # ----------------------------
 # 6) start php-fpm foreground (PID1)
 # ----------------------------
 log "starting php-fpm (foreground)"
-exec php-fpm8.2 -F
+exec "$@"

@@ -1,0 +1,5816 @@
+//#include "sdk_project_config.h"
+//
+//#include <stdint.h>
+//#include <stdbool.h>
+//#include <string.h>
+//#include <stdio.h>
+//
+//volatile int exit_code = 0;
+//
+//#define PORT_LED0_INDEX           (0u)    // PTD0 (Blue)  active-low
+//#define PORT_LED1_INDEX           (15u)   // PTD15 (Red)  active-low
+//#define PORT_LED2_INDEX           (16u)   // PTD16 (Green)active-low
+//#define LED_GPIO_PORT             (PTD)
+//
+//#define PORT_BTN0_INDEX           (12u)   // PTC12 (SW2)
+//#define BTN_PORT_NAME             (PORTC)
+//#define BTN_PORT_IRQn             (PORTC_IRQn)
+//
+//#define USE_LIN_XCVR              (1U)
+//#define LIN_XCVR_ENABLE_PIN       (9UL)
+//#define LIN_XCVR_ENABLE_MASK      (0x1u << LIN_XCVR_ENABLE_PIN)
+//#define LIN_XCVR_ENABLE_GPIO_PORT (PTE)
+//
+//// ===== LPTMR time base (네 스샷 기준) =====
+//#define TIMER_COMPARE_VAL             (uint16_t)(2000U)
+//#define TIMER_TICKS_1US               (uint16_t)(4U)
+//#define LPTMR_TICK_US                 (500U)      // 0.5ms/tick
+//
+//// ===== LIN =====
+//#define DATA_SIZE                     (8U)
+//#define FRAME_LED_CMD                 (1U)
+//#define FRAME_SLAVE_STATUS            (2U)
+//#define TIMEOUT                       (500U)
+//
+//// ===== UART =====
+//#define UART_INST                     (INST_LPUART_1)
+//
+//// ===== LPTMR counters =====
+//static uint16_t timerOverflowInterruptCount = 0U;
+//static volatile uint32_t g_tick500us = 0U;
+//
+//// ===== Buffers =====
+//static uint8_t txCmd[DATA_SIZE] = {0};
+//static uint8_t rxStatus[DATA_SIZE] = {0};
+//
+//// ===== flags/state =====
+//static volatile bool g_btnStep = false;
+//
+//static volatile bool g_cmdTxDone = false;
+//static volatile bool g_cmdErr = false;
+//
+//static volatile bool g_statusRxDone = false;
+//static volatile bool g_statusErr = false;
+//
+//static volatile uint8_t g_ledState = 0U; // 0=RED,1=BLUE,2=GREEN,3=OFF
+//
+//// ===== bus scheduler =====
+//static volatile bool g_busBusy = false;        // 헤더 쏘고 완료 이벤트를 기다리는 중
+//static volatile bool g_pendingStatus = false;  // 다음에 STATUS를 반드시 1회 요청해야 함
+//static volatile uint32_t g_waitStatusDeadlineTick = 0U; // STATUS 응답 deadline(타임아웃)
+//
+////==================================================================================
+//// LED helpers (active-low)
+////==================================================================================
+//static void led_all_off(void)
+//{
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED0_INDEX, 1U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED1_INDEX, 1U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED2_INDEX, 1U);
+//}
+//static void led_blue(void)
+//{
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED0_INDEX, 0U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED1_INDEX, 1U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED2_INDEX, 1U);
+//}
+//static void led_green(void)
+//{
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED0_INDEX, 1U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED1_INDEX, 1U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED2_INDEX, 0U);
+//}
+//static void led_red(void)
+//{
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED0_INDEX, 1U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED1_INDEX, 0U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED2_INDEX, 1U);
+//}
+//
+////==================================================================================
+//// UART helpers
+////==================================================================================
+//static void uart_send_bytes(const uint8_t *data, uint32_t len)
+//{
+//    uint32_t rem = 0u;
+//    while (LPUART_DRV_GetTransmitStatus(UART_INST, &rem) == STATUS_BUSY)
+//    {
+//        __asm("nop");
+//    }
+//    (void)LPUART_DRV_SendData(UART_INST, data, len);
+//}
+//
+//static void uart_send_string(const char *s)
+//{
+//    uart_send_bytes((const uint8_t *)s, (uint32_t)strlen(s));
+//}
+//
+//static const char *led_state_str(uint8_t s)
+//{
+//    switch (s)
+//    {
+//        case 0U: return "RED";
+//        case 1U: return "BLUE";
+//        case 2U: return "GREEN";
+//        case 3U: return "OFF";
+//        default: return "UNK";
+//    }
+//}
+//
+//static void uart_status_line(uint8_t led, uint8_t err)
+//{
+//    char line[96];
+//    (void)snprintf(line, sizeof(line),
+//                   "\r[SLAVE] LED=%s(%u) ERR=0x%02X    ",
+//                   led_state_str(led), (unsigned)led, (unsigned)err);
+//    uart_send_string(line);
+//}
+//
+//static void uart_log_event(const char *msg)
+//{
+//    uart_send_string("\r\n");
+//    uart_send_string(msg);
+//    uart_send_string("\r\n");
+//}
+//
+////==================================================================================
+//// LPTMR ISR
+////==================================================================================
+//void LPTMR_ISR(void)
+//{
+//    LIN_DRV_TimeoutService(INST_LIN2);
+//
+//    g_tick500us++;
+//
+//    timerOverflowInterruptCount++;
+//    LPTMR_DRV_ClearCompareFlag(INST_LPTMR_1);
+//}
+//
+//uint32_t lin1TimerGetTimeIntervalCallback0(uint32_t *ns)
+//{
+//    static uint32_t previousCountValue = 0UL;
+//    uint32_t counterValue;
+//
+//    counterValue = LPTMR_DRV_GetCounterValueByCount(INST_LPTMR_1);
+//    *ns = ((uint32_t)(counterValue + timerOverflowInterruptCount * TIMER_COMPARE_VAL - previousCountValue))
+//            * 1000U / TIMER_TICKS_1US;
+//
+//    timerOverflowInterruptCount = 0UL;
+//    previousCountValue = counterValue;
+//
+//    return 0UL;
+//}
+//
+////==================================================================================
+//// Button ISR
+////==================================================================================
+//void BTNPORT_IRQHandler(void)
+//{
+//    if (PINS_DRV_GetPortIntFlag(BTN_PORT_NAME) & (1UL << PORT_BTN0_INDEX))
+//    {
+//        g_btnStep = true;
+//        PINS_DRV_ClearPinIntFlagCmd(BTN_PORT_NAME, PORT_BTN0_INDEX);
+//    }
+//}
+//
+////==================================================================================
+//// LIN Callback
+////==================================================================================
+//lin_callback_t CallbackHandler(uint32_t instance, lin_state_t * linState)
+//{
+//    lin_callback_t callbackCurrent = linState->Callback;
+//    (void)instance;
+//
+//    switch (linState->currentEventId)
+//    {
+//        case LIN_PID_OK:
+//            LIN_DRV_SetTimeoutCounter(INST_LIN2, TIMEOUT);
+//
+//            if (FRAME_LED_CMD == linState->currentId)
+//            {
+//                (void)LIN_DRV_SendFrameData(INST_LIN2, txCmd, DATA_SIZE);
+//            }
+//            else if (FRAME_SLAVE_STATUS == linState->currentId)
+//            {
+//                (void)LIN_DRV_ReceiveFrameData(INST_LIN2, rxStatus, DATA_SIZE);
+//            }
+//            break;
+//
+//        case LIN_TX_COMPLETED:
+//            if (lin2_State.currentId == FRAME_LED_CMD) g_cmdTxDone = true;
+//            g_busBusy = false;
+//            LIN_DRV_GotoIdleState(INST_LIN2);
+//            break;
+//
+//        case LIN_RX_COMPLETED:
+//            if (lin2_State.currentId == FRAME_SLAVE_STATUS) g_statusRxDone = true;
+//            g_busBusy = false;
+//            LIN_DRV_GotoIdleState(INST_LIN2);
+//            break;
+//
+//        case LIN_PID_ERROR:
+//        case LIN_CHECKSUM_ERROR:
+//        case LIN_READBACK_ERROR:
+//        case LIN_FRAME_ERROR:
+//            if (lin2_State.currentId == FRAME_LED_CMD)      g_cmdErr = true;
+//            if (lin2_State.currentId == FRAME_SLAVE_STATUS) g_statusErr = true;
+//            g_busBusy = false;
+//            LIN_DRV_GotoIdleState(INST_LIN2);
+//            break;
+//
+//        default:
+//            break;
+//    }
+//
+//    return callbackCurrent;
+//}
+//
+////==================================================================================
+//// Send helpers (중복 호출 방지: busBusy를 여기서 세팅)
+////==================================================================================
+//static void master_send_cmd(uint8_t ledState)
+//{
+//    memset(txCmd, 0, sizeof(txCmd));
+//    txCmd[0] = (uint8_t)(ledState & 0x03U);
+//
+//    g_cmdTxDone = false;
+//    g_cmdErr = false;
+//
+//    g_busBusy = true;
+//    (void)LIN_DRV_MasterSendHeader(INST_LIN2, FRAME_LED_CMD);
+//
+//    // CMD 이후에는 STATUS 1회는 반드시 받아서 동기화
+//    g_pendingStatus = true;
+//}
+//
+//static void master_request_status(void)
+//{
+//    g_statusRxDone = false;
+//    g_statusErr = false;
+//
+//    g_busBusy = true;
+//    (void)LIN_DRV_MasterSendHeader(INST_LIN2, FRAME_SLAVE_STATUS);
+//
+//    // STATUS 타임아웃: 200ms 정도 안 오면 busy 풀고 재시도 가능하게
+//    // tick500us 기준: 200ms = 400 ticks
+//    g_waitStatusDeadlineTick = g_tick500us + 400U;
+//}
+//
+////==================================================================================
+//// main task
+////==================================================================================
+//static void lin_master_task(void)
+//{
+//    // UART init
+//    (void)LPUART_DRV_Init(UART_INST, &lpUartState1, &lpuart_1_InitConfig0);
+//    uart_send_string("\r\n=== LIN MASTER START ===\r\n");
+//    uart_send_string("SW2: RED->BLUE->GREEN->OFF\r\n");
+//    uart_send_string("Master polls status safely (no overlap).\r\n\r\n");
+//
+//    // LIN init
+//    LIN_DRV_Init(INST_LIN2, &lin2_InitConfig0, &lin2_State);
+//    LIN_DRV_InstallCallback(INST_LIN2, (lin_callback_t)CallbackHandler);
+//
+//    led_all_off();
+//
+//    // periodic poll: 200ms
+//    const uint32_t POLL_PERIOD_MS = 200U;
+//    const uint32_t POLL_PERIOD_TICKS = (POLL_PERIOD_MS * 1000U) / LPTMR_TICK_US; // 200ms -> 400 ticks
+//    uint32_t lastPollTick = g_tick500us;
+//
+//    for (;;)
+//    {
+//        // 1) 버튼: CMD 요청만 큐잉(버스가 바쁘면 다음 루프에서 처리)
+//        if (g_btnStep)
+//        {
+//            g_btnStep = false;
+//
+//
+//
+//            // 버스가 한가할 때만 헤더를 보낸다
+//            if (!g_busBusy)
+//            {
+//                g_ledState++;
+//                if (g_ledState >= 4U) g_ledState = 0U;
+//                master_send_cmd((uint8_t)g_ledState);
+//                led_blue();
+//                uart_log_event("[EVENT] BTN -> send CMD");
+//            }
+//            else
+//            {
+//                // 버스 바쁘면 “명령만 pending”으로 남기고 싶으면 여기 확장 가능
+//                // 지금은 최소: 다음 버튼에서 다시 시도
+//                uart_log_event("[WARN] BUSY, drop BTN cmd (try again)");
+//            }
+//        }
+//
+//        // 2) CMD TX 완료되면, STATUS를 “반드시 1회” 요청하도록 pending 처리
+//        if (g_cmdTxDone)
+//        {
+//            g_cmdTxDone = false;
+//            // TX 완료 시점엔 busBusy는 콜백에서 false로 풀린 상태
+//        }
+//
+//        // 3) STATUS 수신 완료
+//        if (g_statusRxDone)
+//        {
+//            g_statusRxDone = false;
+//            g_pendingStatus = false; // 동기화 완료
+//
+//            g_ledState = (uint8_t)(rxStatus[0] & 0x03U);
+//            uint8_t e = rxStatus[1];
+//
+//            uart_status_line(g_ledState, e);
+//            led_green();
+//        }
+//
+//        // 4) 에러 처리
+//        if (g_cmdErr)
+//        {
+//            g_cmdErr = false;
+//            uart_log_event("[MASTER] CMD error");
+//            led_red();
+//
+//            // CMD 에러여도 상태 동기화는 다음 폴링으로 커버
+//        }
+//
+//        if (g_statusErr)
+//        {
+//            g_statusErr = false;
+//            uart_log_event("[MASTER] STATUS error");
+//            led_red();
+//
+//            // 다음 폴링에서 재시도
+//            g_pendingStatus = true;
+//        }
+//
+//        // 5) STATUS 타임아웃(이게 핵심: “어느 순간부터 못 받는 상태”를 자동 복구)
+//        if (g_pendingStatus && (!g_busBusy))
+//        {
+//            // pendingStatus가 있으면 주기 폴링보다 우선해서 즉시 요청
+//            master_request_status();
+//        }
+//        else
+//        {
+//            // 6) periodic poll (버스 idle일 때만)
+//            uint32_t now = g_tick500us;
+//            if ((uint32_t)(now - lastPollTick) >= POLL_PERIOD_TICKS)
+//            {
+//                lastPollTick = now;
+//
+//                if (!g_busBusy)
+//                {
+//                    master_request_status();
+//                }
+//            }
+//        }
+//
+//        // 7) STATUS 응답이 너무 오래 안 오면(busBusy stuck 방지)
+//        if (g_busBusy && (g_waitStatusDeadlineTick != 0U))
+//        {
+//            uint32_t now = g_tick500us;
+//            if ((int32_t)(now - g_waitStatusDeadlineTick) >= 0)
+//            {
+//                // 강제 복구
+//                g_busBusy = false;
+//                g_waitStatusDeadlineTick = 0U;
+//                uart_log_event("[RECOVERY] STATUS timeout -> retry");
+//                g_pendingStatus = true;
+//            }
+//        }
+//    }
+//}
+//
+////==================================================================================
+//// main
+////==================================================================================
+//int main(void)
+//{
+//    CLOCK_SYS_Init(g_clockManConfigsArr, CLOCK_MANAGER_CONFIG_CNT,
+//                   g_clockManCallbacksArr, CLOCK_MANAGER_CALLBACK_CNT);
+//    CLOCK_SYS_UpdateConfiguration(0U, CLOCK_MANAGER_POLICY_AGREEMENT);
+//
+//    PINS_DRV_Init(NUM_OF_CONFIGURED_PINS0, g_pin_mux_InitConfigArr0);
+//
+//#if USE_LIN_XCVR
+//    PINS_DRV_SetPinsDirection(LIN_XCVR_ENABLE_GPIO_PORT, LIN_XCVR_ENABLE_MASK);
+//    PINS_DRV_SetPins(LIN_XCVR_ENABLE_GPIO_PORT, LIN_XCVR_ENABLE_MASK);
+//#endif
+//
+//    // Button IRQ
+//    INT_SYS_InstallHandler(BTN_PORT_IRQn, BTNPORT_IRQHandler, (isr_t *)NULL);
+//    INT_SYS_EnableIRQ(BTN_PORT_IRQn);
+//
+//    // LPTMR
+//    LPTMR_DRV_Init(INST_LPTMR_1, &lptmr_1_config0, false);
+//    INT_SYS_InstallHandler(LPTMR0_IRQn, LPTMR_ISR, (isr_t *)NULL);
+//    INT_SYS_EnableIRQ(LPTMR0_IRQn);
+//    LPTMR_DRV_StartCounter(INST_LPTMR_1);
+//
+//    lin_master_task();
+//
+//    for (;;)
+//    {
+//        if (exit_code != 0) break;
+//    }
+//    return exit_code;
+//}
+////////////////////////////////////////////////////////////////////
+//#include "sdk_project_config.h"
+//
+//#include <stdint.h>
+//#include <stdbool.h>
+//#include <string.h>
+//#include <stdio.h>
+//
+//volatile int exit_code = 0;
+//
+//// ============================================================
+//// EVB LED (active-low)
+//// ============================================================
+//#define PORT_LED0_INDEX           (0u)    // PTD0 (Blue)  active-low
+//#define PORT_LED1_INDEX           (15u)   // PTD15 (Red)  active-low
+//#define PORT_LED2_INDEX           (16u)   // PTD16 (Green)active-low
+//#define LED_GPIO_PORT             (PTD)
+//
+//// ============================================================
+//// Buttons: 요구사항대로 12/13 사용 (같은 PORTC 가정)
+////   BTN12: LEFT
+////   BTN13: RIGHT
+//// ============================================================
+//#define PORT_BTN_LEFT_INDEX       (12u)   // PTC12
+//#define PORT_BTN_RIGHT_INDEX      (13u)   // PTC13
+//#define BTN_PORT_NAME             (PORTC)
+//#define BTN_PORT_IRQn             (PORTC_IRQn)
+//
+//// ============================================================
+//// LIN XCVR enable
+//// ============================================================
+//#define USE_LIN_XCVR              (1U)
+//#define LIN_XCVR_ENABLE_PIN       (9UL)
+//#define LIN_XCVR_ENABLE_MASK      (0x1u << LIN_XCVR_ENABLE_PIN)
+//#define LIN_XCVR_ENABLE_GPIO_PORT (PTE)
+//
+//// ============================================================
+//// LPTMR time base (너 코드 유지)
+//// ============================================================
+//#define TIMER_COMPARE_VAL             (uint16_t)(2000U)
+//#define TIMER_TICKS_1US               (uint16_t)(4U)
+//#define LPTMR_TICK_US                 (500U)      // 0.5ms/tick
+//
+//// ============================================================
+//// LIN
+//// ============================================================
+//#define DATA_SIZE                     (8U)
+//#define FRAME_MOTOR_CMD               (1U)   // Master -> Slave
+//#define FRAME_SLAVE_STATUS            (2U)   // Slave -> Master
+//#define TIMEOUT                       (500U)
+//
+//// CMD payload
+//#define MOTOR_TARGET_LEFT             (0U)
+//#define MOTOR_TARGET_RIGHT            (1U)
+//
+//// STATUS payload
+//#define RANGE_OPEN                    (0U)
+//#define RANGE_STUCK                   (1U)
+//#define RANGE_CLOSE                   (2U)
+//
+//// STATUS control
+//#define CTRL_BTN					  (0U)
+//#define CTRL_POT					  (1U)
+//
+//// ============================================================
+//// UART
+//// ============================================================
+//#define UART_INST                     (INST_LPUART_1)
+//
+//// ============================================================
+//// LPTMR counters
+//// ============================================================
+//static uint16_t timerOverflowInterruptCount = 0U;
+//static volatile uint32_t g_tick500us = 0U;
+//
+//// ============================================================
+//// Buffers
+//// ============================================================
+//static uint8_t txCmd[DATA_SIZE] = {0};
+//static uint8_t rxStatus[DATA_SIZE] = {0};
+//
+//// ============================================================
+//// flags/state
+//// ============================================================
+//static volatile bool g_btnLeft = false;
+//static volatile bool g_btnRight = false;
+//
+//static volatile bool g_cmdTxDone = false;
+//static volatile bool g_cmdErr = false;
+//
+//static volatile bool g_statusRxDone = false;
+//static volatile bool g_statusErr = false;
+//
+//// bus scheduler
+//static volatile bool g_busBusy = false;
+//static volatile bool g_pendingStatus = false;
+//static volatile uint32_t g_waitStatusDeadlineTick = 0U;
+//
+//// ============================================================
+//// LED helpers (active-low)
+//// ============================================================
+//static void led_all_off(void)
+//{
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED0_INDEX, 1U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED1_INDEX, 1U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED2_INDEX, 1U);
+//}
+//static void led_blue(void)
+//{
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED0_INDEX, 0U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED1_INDEX, 1U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED2_INDEX, 1U);
+//}
+//static void led_green(void)
+//{
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED0_INDEX, 1U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED1_INDEX, 1U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED2_INDEX, 0U);
+//}
+//static void led_red(void)
+//{
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED0_INDEX, 1U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED1_INDEX, 0U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED2_INDEX, 1U);
+//}
+//static void led_yellow(void)
+//{
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED0_INDEX, 1U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED1_INDEX, 0U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED2_INDEX, 0U);
+//}
+//
+//
+//static void apply_led_by_range(uint8_t range)
+//{
+//    switch (range)
+//    {
+//        case RANGE_OPEN:  led_blue();  break;
+//        case RANGE_STUCK: led_yellow(); break;
+//        case RANGE_CLOSE: led_red();   break;
+//        default:          led_all_off(); break;
+//    }
+//}
+//
+//// ============================================================
+//// UART helpers
+//// ============================================================
+//static void uart_send_bytes(const uint8_t *data, uint32_t len)
+//{
+//    uint32_t rem = 0u;
+//    while (LPUART_DRV_GetTransmitStatus(UART_INST, &rem) == STATUS_BUSY)
+//    {
+//        __asm("nop");
+//    }
+//    (void)LPUART_DRV_SendData(UART_INST, data, len);
+//}
+//
+//static void uart_send_string(const char *s)
+//{
+//    uart_send_bytes((const uint8_t *)s, (uint32_t)strlen(s));
+//}
+//
+//static const char *range_str(uint8_t r)
+//{
+//    switch (r)
+//    {
+//        case RANGE_OPEN:  return "OPEN";
+//        case RANGE_STUCK: return "STUCK";
+//        case RANGE_CLOSE: return "CLOSE";
+//        default:          return "UNK";
+//    }
+//}
+//
+//static const char *control_str(uint8_t r)
+//{
+//    switch (r)
+//    {
+//        case CTRL_BTN:  return "BTN";
+//        case CTRL_POT:	return "POT";
+//        default:          return "UNK";
+//    }
+//}
+//
+//static void uart_log_event(const char *msg)
+//{
+//    uart_send_string("\r\n");
+//    uart_send_string(msg);
+//    uart_send_string("\r\n");
+//}
+//
+//static void uart_status_line(uint8_t posPercent, uint8_t range, uint8_t err, uint8_t ctrl)
+//{
+//    char line[96];
+//    (void)snprintf(line, sizeof(line),
+//                   "\r[SLAVE] POS=%3u%% RANGE=%-5s CONTROL=%-5s ERR=0x%02X  ",
+//                   (unsigned)posPercent,
+//                   range_str(range),
+//				   control_str(ctrl),
+//                   (unsigned)err);
+//    uart_send_string(line);
+//}
+//
+//// ============================================================
+//// LPTMR ISR
+//// ============================================================
+//void LPTMR_ISR(void)
+//{
+//    LIN_DRV_TimeoutService(INST_LIN2);
+//    g_tick500us++;
+//    timerOverflowInterruptCount++;
+//    LPTMR_DRV_ClearCompareFlag(INST_LPTMR_1);
+//}
+//
+//uint32_t lin1TimerGetTimeIntervalCallback0(uint32_t *ns)
+//{
+//    static uint32_t previousCountValue = 0UL;
+//    uint32_t counterValue;
+//
+//    counterValue = LPTMR_DRV_GetCounterValueByCount(INST_LPTMR_1);
+//    *ns = ((uint32_t)(counterValue + timerOverflowInterruptCount * TIMER_COMPARE_VAL - previousCountValue))
+//            * 1000U / TIMER_TICKS_1US;
+//
+//    timerOverflowInterruptCount = 0UL;
+//    previousCountValue = counterValue;
+//    return 0UL;
+//}
+//
+//// ============================================================
+//// Button ISR: PTC12 / PTC13 둘 다 체크
+//// ============================================================
+//void BTNPORT_IRQHandler(void)
+//{
+//    uint32_t flags = PINS_DRV_GetPortIntFlag(BTN_PORT_NAME);
+//
+//    if (flags & (1UL << PORT_BTN_LEFT_INDEX))
+//    {
+//        g_btnLeft = true;
+//        PINS_DRV_ClearPinIntFlagCmd(BTN_PORT_NAME, PORT_BTN_LEFT_INDEX);
+//    }
+//
+//    if (flags & (1UL << PORT_BTN_RIGHT_INDEX))
+//    {
+//        g_btnRight = true;
+//        PINS_DRV_ClearPinIntFlagCmd(BTN_PORT_NAME, PORT_BTN_RIGHT_INDEX);
+//    }
+//}
+//
+//// ============================================================
+//// LIN Callback
+//// ============================================================
+//lin_callback_t CallbackHandler(uint32_t instance, lin_state_t * linState)
+//{
+//    lin_callback_t callbackCurrent = linState->Callback;
+//    (void)instance;
+//
+//    switch (linState->currentEventId)
+//    {
+//        case LIN_PID_OK:
+//            LIN_DRV_SetTimeoutCounter(INST_LIN2, TIMEOUT);
+//
+//            if (FRAME_MOTOR_CMD == linState->currentId)
+//            {
+//                (void)LIN_DRV_SendFrameData(INST_LIN2, txCmd, DATA_SIZE);
+//            }
+//            else if (FRAME_SLAVE_STATUS == linState->currentId)
+//            {
+//                (void)LIN_DRV_ReceiveFrameData(INST_LIN2, rxStatus, DATA_SIZE);
+//            }
+//            break;
+//
+//        case LIN_TX_COMPLETED:
+//            if (lin2_State.currentId == FRAME_MOTOR_CMD) g_cmdTxDone = true;
+//            g_busBusy = false;
+//            LIN_DRV_GotoIdleState(INST_LIN2);
+//            break;
+//
+//        case LIN_RX_COMPLETED:
+//            if (lin2_State.currentId == FRAME_SLAVE_STATUS) g_statusRxDone = true;
+//            g_busBusy = false;
+//            LIN_DRV_GotoIdleState(INST_LIN2);
+//            break;
+//
+//        case LIN_PID_ERROR:
+//        case LIN_CHECKSUM_ERROR:
+//        case LIN_READBACK_ERROR:
+//        case LIN_FRAME_ERROR:
+//            if (lin2_State.currentId == FRAME_MOTOR_CMD)      g_cmdErr = true;
+//            if (lin2_State.currentId == FRAME_SLAVE_STATUS)   g_statusErr = true;
+//            g_busBusy = false;
+//            LIN_DRV_GotoIdleState(INST_LIN2);
+//            break;
+//
+//        default:
+//            break;
+//    }
+//
+//    return callbackCurrent;
+//}
+//
+//// ============================================================
+//// Send helpers (busBusy 보호)
+//// ============================================================
+//static void master_send_motor_cmd(uint8_t target)
+//{
+//    memset(txCmd, 0, sizeof(txCmd));
+//    txCmd[0] = (uint8_t)(target & 0x01U);
+//
+//    g_cmdTxDone = false;
+//    g_cmdErr = false;
+//
+//    g_busBusy = true;
+//    (void)LIN_DRV_MasterSendHeader(INST_LIN2, FRAME_MOTOR_CMD);
+//
+//    // CMD 이후 STATUS 1회는 반드시 받아 동기화
+//    g_pendingStatus = true;
+//}
+//
+//static void master_request_status(void)
+//{
+//    g_statusRxDone = false;
+//    g_statusErr = false;
+//
+//    g_busBusy = true;
+//    (void)LIN_DRV_MasterSendHeader(INST_LIN2, FRAME_SLAVE_STATUS);
+//
+//    // 200ms deadline (tick500us 기준 400 ticks)
+//    g_waitStatusDeadlineTick = g_tick500us + 400U;
+//}
+//
+//// ============================================================
+//// main task
+//// ============================================================
+//static void lin_master_task(void)
+//{
+//    (void)LPUART_DRV_Init(UART_INST, &lpUartState1, &lpuart_1_InitConfig0);
+//    uart_send_string("\r\n=== LIN MASTER START (MOTOR) ===\r\n");
+//    uart_send_string("BTN12: MOTOR LEFT, BTN13: MOTOR RIGHT\r\n");
+//    uart_send_string("Master polls slave status and drives local LED.\r\n\r\n");
+//
+//    LIN_DRV_Init(INST_LIN2, &lin2_InitConfig0, &lin2_State);
+//    LIN_DRV_InstallCallback(INST_LIN2, (lin_callback_t)CallbackHandler);
+//
+//    led_all_off();
+//
+//    // poll 200ms
+//    const uint32_t POLL_PERIOD_MS = 200U;
+//    const uint32_t POLL_PERIOD_TICKS = (POLL_PERIOD_MS * 1000U) / LPTMR_TICK_US;
+//    uint32_t lastPollTick = g_tick500us;
+//
+//    for (;;)
+//    {
+//        // 1) 버튼 이벤트 -> motor cmd
+//        if (g_btnLeft)
+//        {
+//            g_btnLeft = false;
+//            // while 폴링으로 변경하는게 좋을까? 아니면 다른 ㄴ좋은 방식이 있는걸까
+//            if (!g_busBusy)
+//            {
+//                master_send_motor_cmd(MOTOR_TARGET_LEFT);
+//                uart_log_event("[EVENT] BTN12 -> send MOTOR LEFT");
+//            }
+//            else
+//            {
+//                uart_log_event("[WARN] BUSY, drop LEFT cmd");
+//            }
+//        }
+//
+//        if (g_btnRight)
+//        {
+//            g_btnRight = false;
+//
+//            if (!g_busBusy)
+//            {
+//                master_send_motor_cmd(MOTOR_TARGET_RIGHT);
+//                uart_log_event("[EVENT] BTN13 -> send MOTOR RIGHT");
+//            }
+//            else
+//            {
+//                uart_log_event("[WARN] BUSY, drop RIGHT cmd");
+//            }
+//        }
+//
+//        // 2) STATUS 수신 완료 -> LED 반영
+//        if (g_statusRxDone)
+//        {
+//            g_statusRxDone = false;
+//            g_pendingStatus = false;
+//
+//            uint8_t pos   = rxStatus[0];
+//            uint8_t range = rxStatus[1];
+//            uint8_t err   = rxStatus[2];
+//            uint8_t ctrl  = rxStatus[3];
+//
+//            uart_status_line(pos, range, err, ctrl);
+//            apply_led_by_range(range);
+//        }
+//
+//        // 3) 에러
+//        if (g_cmdErr)
+//        {
+//            g_cmdErr = false;
+//            uart_log_event("[MASTER] CMD error");
+//            led_red();
+//        }
+//
+//        if (g_statusErr)
+//        {
+//            g_statusErr = false;
+//            uart_log_event("[MASTER] STATUS error");
+//            led_red();
+//            g_pendingStatus = true;
+//        }
+//
+//        // 4) pendingStatus 우선 요청
+//        if (g_pendingStatus && (!g_busBusy))
+//        {
+//            master_request_status();
+//        }
+//        else
+//        {
+//            // 5) periodic poll
+//            uint32_t now = g_tick500us;
+//            if ((uint32_t)(now - lastPollTick) >= POLL_PERIOD_TICKS)
+//            {
+//                lastPollTick = now;
+//                if (!g_busBusy)
+//                {
+//                    master_request_status();
+//                }
+//            }
+//        }
+//
+//        // 6) STATUS timeout recovery
+//        if (g_busBusy && (g_waitStatusDeadlineTick != 0U))
+//        {
+//            uint32_t now = g_tick500us;
+//            if ((int32_t)(now - g_waitStatusDeadlineTick) >= 0)
+//            {
+//                g_busBusy = false;
+//                g_waitStatusDeadlineTick = 0U;
+//                uart_log_event("[RECOVERY] STATUS timeout -> retry");
+//                g_pendingStatus = true;
+//            }
+//        }
+//    }
+//}
+//
+//// ============================================================
+//// main
+//// ============================================================
+//int main(void)
+//{
+//    CLOCK_SYS_Init(g_clockManConfigsArr, CLOCK_MANAGER_CONFIG_CNT,
+//                   g_clockManCallbacksArr, CLOCK_MANAGER_CALLBACK_CNT);
+//    CLOCK_SYS_UpdateConfiguration(0U, CLOCK_MANAGER_POLICY_AGREEMENT);
+//
+//    PINS_DRV_Init(NUM_OF_CONFIGURED_PINS0, g_pin_mux_InitConfigArr0);
+//
+//#if USE_LIN_XCVR
+//    PINS_DRV_SetPinsDirection(LIN_XCVR_ENABLE_GPIO_PORT, LIN_XCVR_ENABLE_MASK);
+//    PINS_DRV_SetPins(LIN_XCVR_ENABLE_GPIO_PORT, LIN_XCVR_ENABLE_MASK);
+//#endif
+//
+//    // Button IRQ (PORTC)
+//    INT_SYS_InstallHandler(BTN_PORT_IRQn, BTNPORT_IRQHandler, (isr_t *)NULL);
+//    INT_SYS_EnableIRQ(BTN_PORT_IRQn);
+//
+//    // LPTMR
+//    LPTMR_DRV_Init(INST_LPTMR_1, &lptmr_1_config0, false);
+//    INT_SYS_InstallHandler(LPTMR0_IRQn, LPTMR_ISR, (isr_t *)NULL);
+//    INT_SYS_EnableIRQ(LPTMR0_IRQn);
+//    LPTMR_DRV_StartCounter(INST_LPTMR_1);
+//
+//    lin_master_task();
+//
+//    for (;;)
+//    {
+//        if (exit_code != 0) break;
+//    }
+//    return exit_code;
+//}
+////////////////////////////////////////////////////////
+
+//#include "sdk_project_config.h"
+//
+//#include <stdint.h>
+//#include <stdbool.h>
+//#include <string.h>
+//#include <stdio.h>
+//
+//volatile int exit_code = 0;
+//
+//// ============================================================
+//// EVB LED (active-low)
+//// ============================================================
+//#define PORT_LED0_INDEX           (0u)    // PTD0 (Blue)  active-low
+//#define PORT_LED1_INDEX           (15u)   // PTD15 (Red)  active-low
+//#define PORT_LED2_INDEX           (16u)   // PTD16 (Green)active-low
+//#define LED_GPIO_PORT             (PTD)
+//
+//// ============================================================
+//// Buttons: PTC12 / PTC13
+////   BTN12: LEFT
+////   BTN13: RIGHT
+//// ============================================================
+//#define PORT_BTN_LEFT_INDEX       (12u)   // PTC12
+//#define PORT_BTN_RIGHT_INDEX      (13u)   // PTC13
+//#define BTN_PORT_NAME             (PORTC)
+//#define BTN_PORT_IRQn             (PORTC_IRQn)
+//
+//// ============================================================
+//// LIN XCVR enable
+//// ============================================================
+//#define USE_LIN_XCVR              (1U)
+//#define LIN_XCVR_ENABLE_PIN       (9UL)
+//#define LIN_XCVR_ENABLE_MASK      (0x1u << LIN_XCVR_ENABLE_PIN)
+//#define LIN_XCVR_ENABLE_GPIO_PORT (PTE)
+//
+//// ============================================================
+//// LPTMR time base
+//// ============================================================
+//#define TIMER_COMPARE_VAL             (uint16_t)(2000U)
+//#define TIMER_TICKS_1US               (uint16_t)(4U)
+//#define LPTMR_TICK_US                 (500U)      // 0.5ms/tick
+//
+//// ============================================================
+//// LIN
+//// ============================================================
+//#define DATA_SIZE                     (8U)
+//#define FRAME_MOTOR_CMD               (1U)   // Master -> Slave
+//#define FRAME_SLAVE_STATUS            (2U)   // Slave -> Master
+//#define TIMEOUT                       (500U)
+//
+//// CMD payload
+//#define MOTOR_TARGET_LEFT             (0U)
+//#define MOTOR_TARGET_RIGHT            (1U)
+//#define MOTOR_TARGET_STUCK			  (2U)
+//
+//// STATUS payload
+//#define RANGE_OPEN                    (0U)
+//#define RANGE_STUCK                   (1U)
+//#define RANGE_CLOSE                   (2U)
+//
+//// STATUS control
+//#define CTRL_BTN                      (0U)
+//#define CTRL_CMD					  (1U)
+//#define CTRL_POT                      (2U)
+//
+//// ============================================================
+//// UART
+//// ============================================================
+//#define UART_INST                     (INST_LPUART_1)
+//
+//// ============================================================
+//// LPTMR counters
+//// ============================================================
+//static uint16_t timerOverflowInterruptCount = 0U;
+//static volatile uint32_t g_tick500us = 0U;
+//
+//// ============================================================
+//// Buffers
+//// ============================================================
+//static uint8_t txCmd[DATA_SIZE] = {0};
+//static uint8_t rxStatus[DATA_SIZE] = {0};
+//
+//// ============================================================
+//// flags/state
+//// ============================================================
+//static volatile uint8_t g_LastSrc = CTRL_BTN;
+//
+//static volatile bool g_btnLeft = false;
+//static volatile bool g_btnRight = false;
+//
+//static volatile bool g_cmdTxDone = false;
+//static volatile bool g_cmdErr = false;
+//
+//static volatile bool g_statusRxDone = false;
+//static volatile bool g_statusErr = false;
+//
+//// bus scheduler
+//static volatile bool g_busBusy = false;
+//static volatile bool g_pendingStatus = false;
+//static volatile uint32_t g_waitStatusDeadlineTick = 0U;
+//
+//static volatile uint8_t g_test = 0;
+//static volatile bool g_bool = false;
+//
+//// ============================================================
+//// LED helpers (active-low)
+//// ============================================================
+//static void led_all_off(void)
+//{
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED0_INDEX, 1U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED1_INDEX, 1U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED2_INDEX, 1U);
+//}
+//
+//static void led_blue(void)
+//{
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED0_INDEX, 0U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED1_INDEX, 1U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED2_INDEX, 1U);
+//}
+//
+//static void led_green(void)
+//{
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED0_INDEX, 1U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED1_INDEX, 1U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED2_INDEX, 0U);
+//}
+//
+//static void led_red(void)
+//{
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED0_INDEX, 1U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED1_INDEX, 0U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED2_INDEX, 1U);
+//}
+//
+//static void led_yellow(void)
+//{
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED0_INDEX, 1U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED1_INDEX, 0U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED2_INDEX, 0U);
+//}
+//
+//static void apply_led_by_range(uint8_t range)
+//{
+//    switch (range)
+//    {
+//        case RANGE_OPEN:  led_blue();    break;
+//        case RANGE_STUCK: led_yellow();  break;
+//        case RANGE_CLOSE: led_red();     break;
+//        default:          led_all_off(); break;
+//    }
+//}
+//
+//// ============================================================
+//// UART helpers (TX)
+//// ============================================================
+//static void uart_send_bytes(const uint8_t *data, uint32_t len)
+//{
+//    uint32_t rem = 0u;
+//    while (LPUART_DRV_GetTransmitStatus(UART_INST, &rem) == STATUS_BUSY)
+//    {
+//        __asm("nop");
+//    }
+//    (void)LPUART_DRV_SendData(UART_INST, data, len);
+//}
+//
+//static void uart_send_char(char c)
+//{
+//    uart_send_bytes((const uint8_t *)&c, 1u);
+//}
+//
+//static void uart_send_string(const char *s)
+//{
+//    while (*s) { uart_send_char(*s++); }
+//}
+//
+//static const char *uart_send_test(const uint8_t gtest)
+//{
+//    switch (gtest)
+//    {
+//        case 0:  return "0";
+//        case 1:  return "1";
+//        case 2:  return "2";
+//        case 3:  return "3";
+//        case 4:  return "4";
+//        case 5:  return "5";
+//        case 6:  return "6";
+//        case 7:  return "7";
+//        case 8:  return "8";
+//        case 9:  return "9";
+//        case 10:  return "10";
+//        case 11:  return "11";
+//        case 12:  return "12";
+//        case 13:  return "13";
+//        default:  return "UNK";
+//    }
+//}
+//
+//static void uart_log_event(const char *msg)
+//{
+//    uart_send_string("\r\n");
+//    uart_send_string(msg);
+//    uart_send_string("\r\n");
+//    uart_send_string(uart_send_test(g_test));
+//    uart_send_string("\r\n");
+//    uart_send_string(uart_send_test(g_bool));
+//    uart_send_string("\r\n");
+//}
+//
+//static const char *range_str(uint8_t r)
+//{
+//    switch (r)
+//    {
+//        case RANGE_OPEN:  return "OPEN";
+//        case RANGE_STUCK: return "STUCK";
+//        case RANGE_CLOSE: return "CLOSE";
+//        default:          return "UNK";
+//    }
+//}
+//
+//static const char *control_str(uint8_t r)
+//{
+//	uint8_t test = (r) ? CTRL_POT : g_LastSrc;
+//    switch (test)
+//    {
+//        case CTRL_BTN:  return "BTN";
+//        case CTRL_CMD:	return "CMD";
+//        case CTRL_POT:  return "POT";
+//        default:        return "UNK";
+//    }
+//}
+//
+//static void uart_status_line(uint8_t posPercent, uint8_t range, uint8_t err, uint8_t ctrl)
+//{
+//    char line[96];
+//    (void)snprintf(line, sizeof(line),
+//                   "\r\n[SLAVE] POS=%3u%% RANGE=%-5s CONTROL=%-5s ERR=0x%02X  test=%-5s   test=%-5s",
+//                   (unsigned)posPercent,
+//                   range_str(range),
+//                   control_str(ctrl),
+//                   (unsigned)err,
+//				   uart_send_test(g_test),
+//				   uart_send_test(g_bool));
+//    uart_send_string(line);
+//}
+//
+//static void print_commands_master(void)
+//{
+//    uart_send_string("\r\nCommands:\r\n");
+//    uart_send_string("  left   (or l) : send MOTOR LEFT\r\n");
+//    uart_send_string("  stuck  (or st) : send MOTOR STUCK\r\n");
+//    uart_send_string("  right  (or r) : send MOTOR RIGHT\r\n");
+//    uart_send_string("  status (or s) : request slave status now\r\n");
+//    uart_send_string("  help   (or h) : show this\r\n");
+//    uart_send_string("\r\n");
+//}
+//
+//// ============================================================
+//// UART RX ring buffer (1-byte receive re-armed)  // 슬레이브 방식 이식
+//// ============================================================
+//#define RX_BUF_SIZE (128u)
+//
+//static volatile char g_rx_buf[RX_BUF_SIZE];
+//static volatile uint16_t g_rx_w = 0u;
+//static volatile uint16_t g_rx_r = 0u;
+//
+//static inline uint16_t rb_next(uint16_t x)
+//{
+//    return (uint16_t)((x + 1u) % RX_BUF_SIZE);
+//}
+//
+//static void rb_push(char c)
+//{
+//    uint16_t nw = rb_next(g_rx_w);
+//    if (nw == g_rx_r) return; // overflow drop
+//    g_rx_buf[g_rx_w] = c;
+//    g_rx_w = nw;
+//}
+//
+//static int rb_pop(char *out)
+//{
+//    if (g_rx_r == g_rx_w) return 0;
+//    *out = g_rx_buf[g_rx_r];
+//    g_rx_r = rb_next(g_rx_r);
+//    return 1;
+//}
+//
+//static uint8_t g_rx_byte = 0u;
+//static volatile bool g_rx_armed = false;
+//
+//static void uart_arm_rx_1byte(void)
+//{
+//    if (g_rx_armed) return;
+//
+//    status_t st = LPUART_DRV_ReceiveData(UART_INST, &g_rx_byte, 1u);
+//    if (st == STATUS_SUCCESS)
+//        g_rx_armed = true;
+//}
+//
+//static void uart_poll_rx_and_rearm(void)
+//{
+//    if (!g_rx_armed)
+//    {
+//        uart_arm_rx_1byte();
+//        return;
+//    }
+//
+//    uint32_t rem = 0u;
+//    status_t st = LPUART_DRV_GetReceiveStatus(UART_INST, &rem);
+//
+//    if (st == STATUS_SUCCESS)
+//    {
+//        rb_push((char)g_rx_byte);
+//        g_rx_armed = false;
+//        uart_arm_rx_1byte();
+//    }
+//    else if (st == STATUS_BUSY)
+//    {
+//        // receiving...
+//    }
+//    else
+//    {
+//        (void)LPUART_DRV_AbortReceivingData(UART_INST);
+//        g_rx_armed = false;
+//        uart_arm_rx_1byte();
+//    }
+//}
+//
+//// ============================================================
+//// CMD parser (line-based)  // 슬레이브 방식 이식
+//// ============================================================
+//#define CMD_BUF_SIZE (32u)
+//static char g_cmd_buf[CMD_BUF_SIZE];
+//static uint32_t g_cmd_len = 0u;
+//
+//static void cmd_reset(void)
+//{
+//    g_cmd_len = 0u;
+//    g_cmd_buf[0] = '\0';
+//}
+//
+//static void cmd_feed_char(char ch,
+//                          uint8_t *req_help,
+//                          uint8_t *req_status,
+//                          uint8_t *req_left,
+//                          uint8_t *req_right,
+//						  uint8_t *req_stuck)
+//{
+//    if (ch == '\r' || ch == '\n')
+//    {
+//        g_cmd_buf[g_cmd_len] = '\0';
+//
+//        if (strcmp(g_cmd_buf, "help") == 0 || strcmp(g_cmd_buf, "h") == 0)
+//            *req_help = 1u;
+//        else if (strcmp(g_cmd_buf, "status") == 0 || strcmp(g_cmd_buf, "s") == 0)
+//            *req_status = 1u;
+//        else if (strcmp(g_cmd_buf, "left") == 0 || strcmp(g_cmd_buf, "l") == 0)
+//            *req_left = 1u;
+//        else if (strcmp(g_cmd_buf, "right") == 0 || strcmp(g_cmd_buf, "r") == 0)
+//            *req_right = 1u;
+//        else if (strcmp(g_cmd_buf, "stuck") == 0 || strcmp(g_cmd_buf, "st") == 0)
+//            *req_stuck = 1u;
+//        else if (g_cmd_buf[0] != '\0')
+//            uart_log_event("[ERR] unknown cmd (help)");
+//
+//        cmd_reset();
+//        return;
+//    }
+//
+//    // lower
+//    if (ch >= 'A' && ch <= 'Z') ch = (char)(ch - 'A' + 'a');
+//
+//    if (g_cmd_len < (CMD_BUF_SIZE - 1u))
+//        g_cmd_buf[g_cmd_len++] = ch;
+//}
+//
+//// ============================================================
+//// LPTMR ISR
+//// ============================================================
+//void LPTMR_ISR(void)
+//{
+//    LIN_DRV_TimeoutService(INST_LIN2);
+//    g_tick500us++;
+//    timerOverflowInterruptCount++;
+//    LPTMR_DRV_ClearCompareFlag(INST_LPTMR_1);
+//}
+//
+//uint32_t lin1TimerGetTimeIntervalCallback0(uint32_t *ns)
+//{
+//    static uint32_t previousCountValue = 0UL;
+//    uint32_t counterValue;
+//
+//    counterValue = LPTMR_DRV_GetCounterValueByCount(INST_LPTMR_1);
+//    *ns = ((uint32_t)(counterValue + timerOverflowInterruptCount * TIMER_COMPARE_VAL - previousCountValue))
+//            * 1000U / TIMER_TICKS_1US;
+//
+//    timerOverflowInterruptCount = 0UL;
+//    previousCountValue = counterValue;
+//    return 0UL;
+//}
+//
+//// ============================================================
+//// Button ISR: PTC12 / PTC13
+//// ============================================================
+//void BTNPORT_IRQHandler(void)
+//{
+//    uint32_t flags = PINS_DRV_GetPortIntFlag(BTN_PORT_NAME);
+//
+//    if (flags & (1UL << PORT_BTN_LEFT_INDEX))
+//    {
+//        g_btnLeft = true;
+//        PINS_DRV_ClearPinIntFlagCmd(BTN_PORT_NAME, PORT_BTN_LEFT_INDEX);
+//    }
+//
+//    if (flags & (1UL << PORT_BTN_RIGHT_INDEX))
+//    {
+//        g_btnRight = true;
+//        PINS_DRV_ClearPinIntFlagCmd(BTN_PORT_NAME, PORT_BTN_RIGHT_INDEX);
+//    }
+//}
+//
+//
+//// ============================================================
+//// LIN Callback
+//// ============================================================
+//lin_callback_t CallbackHandler(uint32_t instance, lin_state_t *linState)
+//{
+//    lin_callback_t callbackCurrent = linState->Callback;
+//
+//    if (linState->timeoutCounterFlag)
+//    {
+//        linState->timeoutCounterFlag = false;
+//        g_bool = true;
+//        if (linState->currentId == FRAME_MOTOR_CMD)    g_cmdErr = true;
+//        if (linState->currentId == FRAME_SLAVE_STATUS) g_statusErr = true;
+//
+//        g_busBusy = false;
+//        (void)LIN_DRV_GotoIdleState(instance);
+//        return callbackCurrent;
+//    }
+//    g_test = linState->currentEventId;
+//    switch (linState->currentEventId)
+//    {
+//        case LIN_PID_OK:
+//            LIN_DRV_SetTimeoutCounter(instance, TIMEOUT);
+//
+//            if (linState->currentId == FRAME_MOTOR_CMD)
+//                (void)LIN_DRV_SendFrameData(instance, txCmd, DATA_SIZE);
+//            else if (linState->currentId == FRAME_SLAVE_STATUS)
+//                (void)LIN_DRV_ReceiveFrameData(instance, rxStatus, DATA_SIZE);
+//            break;
+//
+//        case LIN_TX_COMPLETED:
+//            if (linState->currentId == FRAME_MOTOR_CMD) g_cmdTxDone = true;
+//            g_busBusy = false;
+//            (void)LIN_DRV_GotoIdleState(instance);
+//            break;
+//
+//        case LIN_RX_COMPLETED:
+//            if (linState->currentId == FRAME_SLAVE_STATUS) g_statusRxDone = true;
+//            g_busBusy = false;
+//            (void)LIN_DRV_GotoIdleState(instance);
+//            break;
+//
+//        case LIN_PID_ERROR:
+//        case LIN_CHECKSUM_ERROR:
+//        case LIN_READBACK_ERROR:
+//        case LIN_FRAME_ERROR:
+//            if (linState->currentId == FRAME_MOTOR_CMD)      g_cmdErr = true;
+//            if (linState->currentId == FRAME_SLAVE_STATUS)   g_statusErr = true;
+//            g_busBusy = false;
+//            (void)LIN_DRV_GotoIdleState(instance);
+//            break;
+//
+//        default:
+//            break;
+//    }
+//
+//    return callbackCurrent;
+//}
+//
+//// ============================================================
+//// Send helpers (busBusy 보호)
+//// ============================================================
+//static void master_send_motor_cmd(uint8_t target)
+//{
+//    memset(txCmd, 0, sizeof(txCmd));
+//    txCmd[0] = (uint8_t)(target);
+//
+//    g_cmdTxDone = false;
+//    g_cmdErr = false;
+//
+//    g_busBusy = true;
+//    (void)LIN_DRV_MasterSendHeader(INST_LIN2, FRAME_MOTOR_CMD);
+//
+//    // CMD 이후 STATUS 1회는 반드시 받아 동기화
+//    g_pendingStatus = true;
+//}
+//
+//static void master_request_status(void)
+//{
+//    g_statusRxDone = false;
+//    g_statusErr = false;
+//
+//    g_busBusy = true;
+//    (void)LIN_DRV_MasterSendHeader(INST_LIN2, FRAME_SLAVE_STATUS);
+//
+//    // 200ms deadline (tick500us 기준 400 ticks)
+//    g_waitStatusDeadlineTick = g_tick500us + 400U;
+//}
+//
+//// ============================================================
+//// main task
+//// ============================================================
+//static void lin_master_task(void)
+//{
+//    // UART init
+//    (void)LPUART_DRV_Init(UART_INST, &lpUartState1, &lpuart_1_InitConfig0);
+//
+//    uart_send_string("\r\n=== LIN MASTER START (MOTOR) ===\r\n");
+//    uart_send_string("BTN12: MOTOR LEFT, BTN13: MOTOR RIGHT\r\n");
+//    uart_send_string("UART cmd: left/right/status/help\r\n");
+//    uart_send_string("Master polls slave status and drives local LED.\r\n");
+//
+//    print_commands_master();
+//
+//    // UART RX start (슬레이브 방식)
+//    g_rx_armed = false;
+//    uart_arm_rx_1byte();
+//    cmd_reset();
+//
+//    // LIN init
+//    LIN_DRV_Init(INST_LIN2, &lin2_InitConfig0, &lin2_State);
+//    LIN_DRV_InstallCallback(INST_LIN2, (lin_callback_t)CallbackHandler);
+//
+//    led_all_off();
+//
+//    // poll 200ms
+//    const uint32_t POLL_PERIOD_MS = 200U;
+//    const uint32_t POLL_PERIOD_TICKS = (POLL_PERIOD_MS * 1000U) / LPTMR_TICK_US;
+//    uint32_t lastPollTick = g_tick500us;
+//
+//    for (;;)
+//    {
+//        // ------------------------------------------------------------
+//        // UART RX poll + parse
+//        // ------------------------------------------------------------
+//        uart_poll_rx_and_rearm();
+//
+//        uint8_t req_help = 0u;
+//        uint8_t req_status = 0u;
+//        uint8_t req_left = 0u;
+//        uint8_t req_stuck = 0u;
+//        uint8_t req_right = 0u;
+//
+//        char ch;
+//        while (rb_pop(&ch))
+//        {
+//            cmd_feed_char(ch, &req_help, &req_status, &req_left, &req_right, &req_stuck);
+//        }
+//
+//        if (req_help)
+//        {
+//            print_commands_master();
+//        }
+//
+//        if (req_status)
+//        {
+//            if (!g_busBusy)
+//            {
+//                master_request_status();
+//                uart_log_event("[CMD] status -> request slave status");
+//            }
+//            else
+//            {
+//                uart_log_event("[WARN] BUSY, drop status req");
+//            }
+//        }
+//
+//        if (req_left)
+//        {
+//            if (!g_busBusy)
+//            {
+//                master_send_motor_cmd(MOTOR_TARGET_LEFT);
+//                uart_log_event("[CMD] left -> send MOTOR LEFT");
+//                g_LastSrc = CTRL_CMD;
+//            }
+//            else
+//            {
+//                uart_log_event("[WARN] BUSY, drop LEFT cmd");
+//            }
+//
+//        }
+//        if (req_stuck)
+//        {
+//            if (!g_busBusy)
+//            {
+//                master_send_motor_cmd(MOTOR_TARGET_STUCK);
+//                uart_log_event("[CMD] stuck -> send MOTOR STUCK");
+//                g_LastSrc = CTRL_CMD;
+//            }
+//            else
+//            {
+//                uart_log_event("[WARN] BUSY, drop STUCK cmd");
+//            }
+//
+//        }
+//        if (req_right)
+//        {
+//            if (!g_busBusy)
+//            {
+//                master_send_motor_cmd(MOTOR_TARGET_RIGHT);
+//                uart_log_event("[CMD] right -> send MOTOR RIGHT");
+//                g_LastSrc = CTRL_CMD;
+//            }
+//            else
+//            {
+//                uart_log_event("[WARN] BUSY, drop RIGHT cmd");
+//            }
+//
+//        }
+//
+//        // ------------------------------------------------------------
+//        // 버튼 이벤트 -> motor cmd (기존 유지)
+//        // ------------------------------------------------------------
+//        if (g_btnLeft)
+//        {
+//            g_btnLeft = false;
+//
+//            if (!g_busBusy)
+//            {
+//                master_send_motor_cmd(MOTOR_TARGET_LEFT);
+//                uart_log_event("[EVENT] BTN12 -> send MOTOR LEFT");
+//                g_LastSrc = CTRL_BTN;
+//            }
+//            else
+//            {
+//                uart_log_event("[WARN] BUSY, drop LEFT cmd");
+//            }
+//
+//        }
+//
+//        if (g_btnRight)
+//        {
+//            g_btnRight = false;
+//
+//            if (!g_busBusy)
+//            {
+//                master_send_motor_cmd(MOTOR_TARGET_RIGHT);
+//                uart_log_event("[EVENT] BTN13 -> send MOTOR RIGHT");
+//                g_LastSrc = CTRL_BTN;
+//            }
+//            else
+//            {
+//                uart_log_event("[WARN] BUSY, drop RIGHT cmd");
+//            }
+//
+//        }
+//
+//        // ------------------------------------------------------------
+//        // STATUS 수신 완료 -> LED 반영
+//        // ------------------------------------------------------------
+//        if (g_statusRxDone)
+//        {
+//            g_statusRxDone = false;
+//            g_pendingStatus = false;
+//            g_waitStatusDeadlineTick = 0U;
+//
+//            uint8_t pos   = rxStatus[0];
+//            uint8_t range = rxStatus[1];
+//            uint8_t err   = rxStatus[2];
+//            uint8_t ctrl  = rxStatus[3];
+//
+//            uart_status_line(pos, range, err, ctrl);
+//            apply_led_by_range(range);
+//        }
+//
+//        // ------------------------------------------------------------
+//        // 에러 처리
+//        // ------------------------------------------------------------
+//        if (g_cmdErr)
+//        {
+//            g_cmdErr = false;
+//            uart_log_event("[MASTER] CMD error");
+//            led_green();
+//        }
+//
+//        if (g_statusErr)
+//        {
+//            g_statusErr = false;
+//            uart_log_event("[MASTER] STATUS error");
+//            led_green();
+//            g_pendingStatus = true;
+//        }
+//
+////        // ------------------------------------------------------------
+////        // pendingStatus 우선 요청
+////        // ------------------------------------------------------------
+//        if (g_pendingStatus && (!g_busBusy))
+//        {
+//            master_request_status();
+//        }
+//        else
+//        {
+//            // periodic poll
+//            uint32_t now = g_tick500us;
+//            if ((uint32_t)(now - lastPollTick) >= POLL_PERIOD_TICKS)
+//            {
+//                lastPollTick = now;
+//                if (!g_busBusy)
+//                {
+//                    master_request_status();
+//                }
+//            }
+//        }
+//
+//        // ------------------------------------------------------------
+//        // STATUS timeout recovery
+//        // ------------------------------------------------------------
+//        if (g_busBusy && (g_waitStatusDeadlineTick != 0U))
+//        {
+//            uint32_t now = g_tick500us;
+//            if ((int32_t)(now - g_waitStatusDeadlineTick) >= 0)
+//            {
+//                g_busBusy = false;
+//                g_waitStatusDeadlineTick = 0U;
+//                uart_log_event("[RECOVERY] STATUS timeout -> retry");
+//                g_pendingStatus = true;
+//            }
+//        }
+//    }
+//}
+//
+//// ============================================================
+//// main
+//// ============================================================
+//int main(void)
+//{
+//    CLOCK_SYS_Init(g_clockManConfigsArr, CLOCK_MANAGER_CONFIG_CNT,
+//                   g_clockManCallbacksArr, CLOCK_MANAGER_CALLBACK_CNT);
+//    CLOCK_SYS_UpdateConfiguration(0U, CLOCK_MANAGER_POLICY_AGREEMENT);
+//
+//    PINS_DRV_Init(NUM_OF_CONFIGURED_PINS0, g_pin_mux_InitConfigArr0);
+//
+//#if USE_LIN_XCVR
+//    PINS_DRV_SetPinsDirection(LIN_XCVR_ENABLE_GPIO_PORT, LIN_XCVR_ENABLE_MASK);
+//    PINS_DRV_SetPins(LIN_XCVR_ENABLE_GPIO_PORT, LIN_XCVR_ENABLE_MASK);
+//#endif
+//
+//    // Button IRQ (PORTC)
+//    INT_SYS_InstallHandler(BTN_PORT_IRQn, BTNPORT_IRQHandler, (isr_t *)NULL);
+//    INT_SYS_EnableIRQ(BTN_PORT_IRQn);
+//
+//    // LPTMR
+//    LPTMR_DRV_Init(INST_LPTMR_1, &lptmr_1_config0, false);
+//    INT_SYS_InstallHandler(LPTMR0_IRQn, LPTMR_ISR, (isr_t *)NULL);
+//    INT_SYS_EnableIRQ(LPTMR0_IRQn);
+//    LPTMR_DRV_StartCounter(INST_LPTMR_1);
+//
+//    lin_master_task();
+//
+//    for (;;)
+//    {
+//        if (exit_code != 0) break;
+//    }
+//    return exit_code;
+//}
+////////////////////////////////////////////////////////////////////////////
+//#include "sdk_project_config.h"
+//
+//#include <stdint.h>
+//#include <stdbool.h>
+//#include <string.h>
+//#include <stdio.h>
+//
+//volatile int exit_code = 0;
+//
+//// ============================================================
+//// EVB LED (active-low)
+//// ============================================================
+//#define PORT_LED0_INDEX           (0u)    // PTD0 (Blue)  active-low
+//#define PORT_LED1_INDEX           (15u)   // PTD15 (Red)  active-low
+//#define PORT_LED2_INDEX           (16u)   // PTD16 (Green)active-low
+//#define LED_GPIO_PORT             (PTD)
+//
+//// ============================================================
+//// Buttons: PTC12 / PTC13
+////   BTN12: LEFT
+////   BTN13: RIGHT
+//// ============================================================
+//#define PORT_BTN_LEFT_INDEX       (12u)   // PTC12
+//#define PORT_BTN_RIGHT_INDEX      (13u)   // PTC13
+//#define BTN_PORT_NAME             (PORTC)
+//#define BTN_PORT_IRQn             (PORTC_IRQn)
+//
+//// ============================================================
+//// LIN XCVR enable
+//// ============================================================
+//#define USE_LIN_XCVR              (1U)
+//#define LIN_XCVR_ENABLE_PIN       (9UL)
+//#define LIN_XCVR_ENABLE_MASK      (0x1u << LIN_XCVR_ENABLE_PIN)
+//#define LIN_XCVR_ENABLE_GPIO_PORT (PTE)
+//
+//// ============================================================
+//// LPTMR time base
+//// ============================================================
+//#define TIMER_COMPARE_VAL             (uint16_t)(2000U)
+//#define TIMER_TICKS_1US               (uint16_t)(4U)
+//#define LPTMR_TICK_US                 (500U)      // 0.5ms/tick
+//
+//// ============================================================
+//// LIN
+//// ============================================================
+//#define DATA_SIZE                     (8U)
+//#define FRAME_MOTOR_CMD               (1U)   // Master -> Slave
+//#define FRAME_SLAVE_STATUS            (2U)   // Slave -> Master
+//#define TIMEOUT                       (500U)
+//
+//// CMD payload
+//#define MOTOR_TARGET_LEFT             (0U)
+//#define MOTOR_TARGET_RIGHT            (1U)
+//#define MOTOR_TARGET_STUCK            (2U)
+//
+//// STATUS payload
+//#define RANGE_OPEN                    (0U)
+//#define RANGE_STUCK                   (1U)
+//#define RANGE_CLOSE                   (2U)
+//
+//// STATUS control
+//#define CTRL_BTN                      (0U)
+//#define CTRL_CMD                      (1U)
+//#define CTRL_POT                      (2U)
+//
+//// ============================================================
+//// UART
+//// ============================================================
+//#define UART_INST                     (INST_LPUART_1)
+//
+//// ============================================================
+//// LPTMR counters
+//// ============================================================
+//static uint16_t timerOverflowInterruptCount = 0U;
+//static volatile uint32_t g_tick500us = 0U;
+//
+//// ============================================================
+//// Buffers
+//// ============================================================
+//static uint8_t txCmd[DATA_SIZE] = {0};
+//static uint8_t rxStatus[DATA_SIZE] = {0};
+//
+//// ============================================================
+//// flags/state (원래 변수명 유지)
+//// ============================================================
+//static volatile uint8_t g_LastSrc = CTRL_BTN;
+//
+//static volatile bool g_btnLeft = false;
+//static volatile bool g_btnRight = false;
+//
+//static volatile bool g_cmdTxDone = false;
+//static volatile bool g_cmdErr = false;
+//
+//static volatile bool g_statusRxDone = false;
+//static volatile bool g_statusErr = false;
+//
+//// bus scheduler (기존 변수명 유지하되 의미 강화)
+//static volatile bool g_busBusy = false;
+//static volatile bool g_pendingStatus = false;
+//static volatile uint32_t g_waitStatusDeadlineTick = 0U;
+//
+//// debug
+//static volatile uint8_t g_test = 0U;
+//static volatile uint8_t g_errCode = 0U;     // 1 PID,2 CHK,3 READBACK,4 FRAME,5 TIMEOUT
+//
+//// ============================================================
+//// 추가: 입력 폭주 대응 (Drop 금지, last-wins 큐)
+//// ============================================================
+//static volatile bool g_pendingCmd = false;
+//static volatile uint8_t g_pendingTarget = MOTOR_TARGET_LEFT;
+//
+//// loop에서 poll 중복 방지
+//static bool g_skipPollThisLoop = false;
+//
+//// ============================================================
+//// LED helpers (active-low)
+//// ============================================================
+//static void led_all_off(void)
+//{
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED0_INDEX, 1U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED1_INDEX, 1U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED2_INDEX, 1U);
+//}
+//
+//static void led_blue(void)
+//{
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED0_INDEX, 0U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED1_INDEX, 1U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED2_INDEX, 1U);
+//}
+//
+//static void led_green(void)
+//{
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED0_INDEX, 1U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED1_INDEX, 1U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED2_INDEX, 0U);
+//}
+//
+//static void led_red(void)
+//{
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED0_INDEX, 1U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED1_INDEX, 0U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED2_INDEX, 1U);
+//}
+//
+//static void led_yellow(void)
+//{
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED0_INDEX, 1U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED1_INDEX, 0U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED2_INDEX, 0U);
+//}
+//
+//static void apply_led_by_range(uint8_t range)
+//{
+//    switch (range)
+//    {
+//        case RANGE_OPEN:  led_blue();    break;
+//        case RANGE_STUCK: led_yellow();  break;
+//        case RANGE_CLOSE: led_red();     break;
+//        default:          led_all_off(); break;
+//    }
+//}
+//
+//// ============================================================
+//// UART helpers (TX)
+//// ============================================================
+//static void uart_send_bytes(const uint8_t *data, uint32_t len)
+//{
+//    uint32_t rem = 0u;
+//    while (LPUART_DRV_GetTransmitStatus(UART_INST, &rem) == STATUS_BUSY)
+//    {
+//        __asm("nop");
+//    }
+//    (void)LPUART_DRV_SendData(UART_INST, data, len);
+//}
+//
+//static void uart_send_char(char c)
+//{
+//    uart_send_bytes((const uint8_t *)&c, 1u);
+//}
+//
+//static void uart_send_string(const char *s)
+//{
+//    while (*s) { uart_send_char(*s++); }
+//}
+//
+//static void uart_log_event(const char *msg)
+//{
+//    uart_send_string("\r\n");
+//    uart_send_string(msg);
+//    uart_send_string("\r\n");
+//}
+//
+//static const char *range_str(uint8_t r)
+//{
+//    switch (r)
+//    {
+//        case RANGE_OPEN:  return "OPEN";
+//        case RANGE_STUCK: return "STUCK";
+//        case RANGE_CLOSE: return "CLOSE";
+//        default:          return "UNK";
+//    }
+//}
+//
+//static const char *control_str(uint8_t ctrl)
+//{
+//    // 기존 코드의 이상한 조건은 제거하고 그대로 표시
+//    switch (ctrl)
+//    {
+//        case CTRL_BTN: return "BTN";
+//        case CTRL_CMD: return "CMD";
+//        case CTRL_POT: return "POT";
+//        default:       return "UNK";
+//    }
+//}
+//
+//static const char *lin_err_str(uint8_t e)
+//{
+//    switch (e)
+//    {
+//        case 0: return "NONE";
+//        case 1: return "PID";
+//        case 2: return "CHECKSUM";
+//        case 3: return "READBACK";
+//        case 4: return "FRAME";
+//        case 5: return "TIMEOUT";
+//        default:return "UNK";
+//    }
+//}
+//
+//static void uart_status_line(uint8_t posPercent, uint8_t range, uint8_t err, uint8_t ctrl)
+//{
+//    char line[128];
+//    (void)snprintf(line, sizeof(line),
+//                   "\r\n[SLAVE] POS=%3u%% RANGE=%-5s CONTROL=%-3s ERR=0x%02X  cbEvent=%u  linErr=%s",
+//                   (unsigned)posPercent,
+//                   range_str(range),
+//                   control_str(ctrl),
+//                   (unsigned)err,
+//                   (unsigned)g_test,
+//                   lin_err_str(g_errCode));
+//    uart_send_string(line);
+//}
+//
+//static void print_commands_master(void)
+//{
+//    uart_send_string("\r\nCommands:\r\n");
+//    uart_send_string("  left   (or l)  : send MOTOR LEFT\r\n");
+//    uart_send_string("  stuck  (or st) : send MOTOR STUCK\r\n");
+//    uart_send_string("  right  (or r)  : send MOTOR RIGHT\r\n");
+//    uart_send_string("  status (or s)  : request slave status now\r\n");
+//    uart_send_string("  help   (or h)  : show this\r\n");
+//    uart_send_string("\r\n");
+//}
+//
+//// ============================================================
+//// UART RX ring buffer (1-byte receive re-armed)
+//// ============================================================
+//#define RX_BUF_SIZE (128u)
+//
+//static volatile char g_rx_buf[RX_BUF_SIZE];
+//static volatile uint16_t g_rx_w = 0u;
+//static volatile uint16_t g_rx_r = 0u;
+//
+//static inline uint16_t rb_next(uint16_t x)
+//{
+//    return (uint16_t)((x + 1u) % RX_BUF_SIZE);
+//}
+//
+//static void rb_push(char c)
+//{
+//    uint16_t nw = rb_next(g_rx_w);
+//    if (nw == g_rx_r) return; // overflow drop
+//    g_rx_buf[g_rx_w] = c;
+//    g_rx_w = nw;
+//}
+//
+//static int rb_pop(char *out)
+//{
+//    if (g_rx_r == g_rx_w) return 0;
+//    *out = g_rx_buf[g_rx_r];
+//    g_rx_r = rb_next(g_rx_r);
+//    return 1;
+//}
+//
+//static uint8_t g_rx_byte = 0u;
+//static volatile bool g_rx_armed = false;
+//
+//static void uart_arm_rx_1byte(void)
+//{
+//    if (g_rx_armed) return;
+//
+//    status_t st = LPUART_DRV_ReceiveData(UART_INST, &g_rx_byte, 1u);
+//    if (st == STATUS_SUCCESS)
+//        g_rx_armed = true;
+//}
+//
+//static void uart_poll_rx_and_rearm(void)
+//{
+//    if (!g_rx_armed)
+//    {
+//        uart_arm_rx_1byte();
+//        return;
+//    }
+//
+//    uint32_t rem = 0u;
+//    status_t st = LPUART_DRV_GetReceiveStatus(UART_INST, &rem);
+//
+//    if (st == STATUS_SUCCESS)
+//    {
+//        rb_push((char)g_rx_byte);
+//        g_rx_armed = false;
+//        uart_arm_rx_1byte();
+//    }
+//    else if (st == STATUS_BUSY)
+//    {
+//        // receiving...
+//    }
+//    else
+//    {
+//        (void)LPUART_DRV_AbortReceivingData(UART_INST);
+//        g_rx_armed = false;
+//        uart_arm_rx_1byte();
+//    }
+//}
+//
+//// ============================================================
+//// CMD parser (line-based)
+//// ============================================================
+//#define CMD_BUF_SIZE (32u)
+//static char g_cmd_buf[CMD_BUF_SIZE];
+//static uint32_t g_cmd_len = 0u;
+//
+//static void cmd_reset(void)
+//{
+//    g_cmd_len = 0u;
+//    g_cmd_buf[0] = '\0';
+//}
+//
+//static void cmd_feed_char(char ch,
+//                          uint8_t *req_help,
+//                          uint8_t *req_status,
+//                          uint8_t *req_left,
+//                          uint8_t *req_right,
+//                          uint8_t *req_stuck)
+//{
+//    if (ch == '\r' || ch == '\n')
+//    {
+//        g_cmd_buf[g_cmd_len] = '\0';
+//
+//        if (strcmp(g_cmd_buf, "help") == 0 || strcmp(g_cmd_buf, "h") == 0)
+//            *req_help = 1u;
+//        else if (strcmp(g_cmd_buf, "status") == 0 || strcmp(g_cmd_buf, "s") == 0)
+//            *req_status = 1u;
+//        else if (strcmp(g_cmd_buf, "left") == 0 || strcmp(g_cmd_buf, "l") == 0)
+//            *req_left = 1u;
+//        else if (strcmp(g_cmd_buf, "right") == 0 || strcmp(g_cmd_buf, "r") == 0)
+//            *req_right = 1u;
+//        else if (strcmp(g_cmd_buf, "stuck") == 0 || strcmp(g_cmd_buf, "st") == 0)
+//            *req_stuck = 1u;
+//        else if (g_cmd_buf[0] != '\0')
+//            uart_log_event("[ERR] unknown cmd (help)");
+//
+//        cmd_reset();
+//        return;
+//    }
+//
+//    if (ch >= 'A' && ch <= 'Z') ch = (char)(ch - 'A' + 'a');
+//
+//    if (g_cmd_len < (CMD_BUF_SIZE - 1u))
+//        g_cmd_buf[g_cmd_len++] = ch;
+//}
+//
+//// ============================================================
+//// LPTMR ISR
+//// ============================================================
+//void LPTMR_ISR(void)
+//{
+//    LIN_DRV_TimeoutService(INST_LIN2);
+//    g_tick500us++;
+//    timerOverflowInterruptCount++;
+//    LPTMR_DRV_ClearCompareFlag(INST_LPTMR_1);
+//}
+//
+//uint32_t lin1TimerGetTimeIntervalCallback0(uint32_t *ns)
+//{
+//    static uint32_t previousCountValue = 0UL;
+//    uint32_t counterValue;
+//
+//    counterValue = LPTMR_DRV_GetCounterValueByCount(INST_LPTMR_1);
+//    *ns = ((uint32_t)(counterValue + timerOverflowInterruptCount * TIMER_COMPARE_VAL - previousCountValue))
+//            * 1000U / TIMER_TICKS_1US;
+//
+//    timerOverflowInterruptCount = 0UL;
+//    previousCountValue = counterValue;
+//    return 0UL;
+//}
+//
+//// ============================================================
+//// Button ISR
+//// ============================================================
+//void BTNPORT_IRQHandler(void)
+//{
+//    uint32_t flags = PINS_DRV_GetPortIntFlag(BTN_PORT_NAME);
+//
+//    if (flags & (1UL << PORT_BTN_LEFT_INDEX))
+//    {
+//        g_btnLeft = true;
+//        PINS_DRV_ClearPinIntFlagCmd(BTN_PORT_NAME, PORT_BTN_LEFT_INDEX);
+//    }
+//
+//    if (flags & (1UL << PORT_BTN_RIGHT_INDEX))
+//    {
+//        g_btnRight = true;
+//        PINS_DRV_ClearPinIntFlagCmd(BTN_PORT_NAME, PORT_BTN_RIGHT_INDEX);
+//    }
+//}
+//
+//// ============================================================
+//// LIN Master FSM
+////  - 콜백: 플래그만 세팅
+////  - 메인: PID_OK 보고 Send/Receive 수행, 완료 보고 처리
+//// ============================================================
+//typedef enum
+//{
+//    LIN_SM_IDLE = 0,
+//    LIN_SM_WAIT_PID,
+//    LIN_SM_WAIT_TX,
+//    LIN_SM_WAIT_RX
+//} lin_master_sm_t;
+//
+//static volatile lin_master_sm_t g_linState = LIN_SM_IDLE;
+//static volatile uint8_t g_reqId = 0U;
+//
+//// flags
+//#define LIN_F_PID_OK     (1UL << 0)
+//#define LIN_F_RX_DONE    (1UL << 1)
+//#define LIN_F_TX_DONE    (1UL << 2)
+//#define LIN_F_ERROR      (1UL << 3)
+//#define LIN_F_TIMEOUT    (1UL << 4)
+//static volatile uint32_t g_linFlags = 0U;
+//
+//// ============================================================
+//// LIN Callback: 플래그만
+//// ============================================================
+//lin_callback_t CallbackHandler(uint32_t instance, lin_state_t *linState)
+//{
+//    lin_callback_t ret = linState->Callback;
+//
+//    if (linState->timeoutCounterFlag)
+//    {
+//        linState->timeoutCounterFlag = false;
+//        g_linFlags |= (LIN_F_TIMEOUT | LIN_F_ERROR);
+//        g_errCode = 5;
+//        return ret;
+//    }
+//
+//    g_test = (uint8_t)linState->currentEventId;
+//
+//    switch (linState->currentEventId)
+//    {
+//        case LIN_PID_OK:
+//            g_linFlags |= LIN_F_PID_OK;
+//            break;
+//
+//        case LIN_TX_COMPLETED:
+//            g_linFlags |= LIN_F_TX_DONE;
+//            break;
+//
+//        case LIN_RX_COMPLETED:
+//            g_linFlags |= LIN_F_RX_DONE;
+//            break;
+//
+//        case LIN_PID_ERROR:
+//            g_linFlags |= LIN_F_ERROR;
+//            g_errCode = 1;
+//            break;
+//
+//        case LIN_CHECKSUM_ERROR:
+//            g_linFlags |= LIN_F_ERROR;
+//            g_errCode = 2;
+//            break;
+//
+//        case LIN_READBACK_ERROR:
+//            g_linFlags |= LIN_F_ERROR;
+//            g_errCode = 3;
+//            break;
+//
+//        case LIN_FRAME_ERROR:
+//            g_linFlags |= LIN_F_ERROR;
+//            g_errCode = 4;
+//            break;
+//
+//        default:
+//            break;
+//    }
+//
+//    return ret;
+//}
+//
+//static void lin_master_reset_to_idle(void)
+//{
+//    (void)LIN_DRV_GotoIdleState(INST_LIN2);
+//    g_linState = LIN_SM_IDLE;
+//    g_reqId = 0U;
+//    g_busBusy = false;
+//    g_waitStatusDeadlineTick = 0U;
+//    g_linFlags &= ~(LIN_F_PID_OK | LIN_F_RX_DONE | LIN_F_TX_DONE | LIN_F_ERROR | LIN_F_TIMEOUT);
+//}
+//
+//// start header
+//static bool lin_master_start(uint8_t id)
+//{
+//    if (g_linState != LIN_SM_IDLE) return false;
+//
+//    g_reqId = id;
+//    g_busBusy = true;
+//
+//    (void)LIN_DRV_MasterSendHeader(INST_LIN2, id);
+//    g_linState = LIN_SM_WAIT_PID;
+//    return true;
+//}
+//
+//// ============================================================
+//// TX/RX request helpers (기존 변수명 유지)
+//// ============================================================
+//static bool master_send_motor_cmd(uint8_t target)
+//{
+//    memset(txCmd, 0, sizeof(txCmd));
+//    txCmd[0] = (uint8_t)target;
+//
+//    g_cmdTxDone = false;
+//    g_cmdErr = false;
+//
+//    if (!lin_master_start(FRAME_MOTOR_CMD)) return false;
+//
+//    // CMD 후 STATUS 1회 동기화
+//    g_pendingStatus = true;
+//    return true;
+//}
+//
+//static bool master_request_status(void)
+//{
+//    g_statusRxDone = false;
+//    g_statusErr = false;
+//
+//    if (!lin_master_start(FRAME_SLAVE_STATUS)) return false;
+//
+//    // 200ms deadline (tick500us 기준 400 ticks)
+//    g_waitStatusDeadlineTick = g_tick500us + 400U;
+//    return true;
+//}
+//
+//// ============================================================
+//// Master FSM step
+//// ============================================================
+//static void lin_master_fsm_step(void)
+//{
+//    if (g_linFlags & LIN_F_ERROR)
+//    {
+//        g_linFlags &= ~LIN_F_ERROR;
+//        // 어떤 요청에서 에러났는지 플래그로 남김
+//        if (g_reqId == FRAME_MOTOR_CMD)    g_cmdErr = true;
+//        if (g_reqId == FRAME_SLAVE_STATUS) g_statusErr = true;
+//
+//        lin_master_reset_to_idle();
+//        return;
+//    }
+//
+//    if ((g_linState == LIN_SM_WAIT_PID) && (g_linFlags & LIN_F_PID_OK))
+//    {
+//        g_linFlags &= ~LIN_F_PID_OK;
+//
+//        LIN_DRV_SetTimeoutCounter(INST_LIN2, TIMEOUT);
+//
+//        if (g_reqId == FRAME_MOTOR_CMD)
+//        {
+//            (void)LIN_DRV_SendFrameData(INST_LIN2, txCmd, DATA_SIZE);
+//            g_linState = LIN_SM_WAIT_TX;
+//            return;
+//        }
+//
+//        if (g_reqId == FRAME_SLAVE_STATUS)
+//        {
+//            (void)LIN_DRV_ReceiveFrameData(INST_LIN2, rxStatus, DATA_SIZE);
+//            g_linState = LIN_SM_WAIT_RX;
+//            return;
+//        }
+//
+//        lin_master_reset_to_idle();
+//        return;
+//    }
+//
+//    if ((g_linState == LIN_SM_WAIT_TX) && (g_linFlags & LIN_F_TX_DONE))
+//    {
+//        g_linFlags &= ~LIN_F_TX_DONE;
+//        g_cmdTxDone = true;
+//
+//        lin_master_reset_to_idle();
+//        return;
+//    }
+//
+//    if ((g_linState == LIN_SM_WAIT_RX) && (g_linFlags & LIN_F_RX_DONE))
+//    {
+//        g_linFlags &= ~LIN_F_RX_DONE;
+//        g_statusRxDone = true;
+//
+//        lin_master_reset_to_idle();
+//        return;
+//    }
+//}
+//
+//// ============================================================
+//// main task
+//// ============================================================
+//static void lin_master_task(void)
+//{
+//    // UART init
+//    (void)LPUART_DRV_Init(UART_INST, &lpUartState1, &lpuart_1_InitConfig0);
+//
+//    uart_send_string("\r\n=== LIN MASTER START (MOTOR) ===\r\n");
+//    uart_send_string("BTN12: MOTOR LEFT, BTN13: MOTOR RIGHT\r\n");
+//    uart_send_string("UART cmd: left/right/stuck/status/help\r\n");
+//
+//    print_commands_master();
+//
+//    // UART RX start
+//    g_rx_armed = false;
+//    uart_arm_rx_1byte();
+//    cmd_reset();
+//
+//    // LIN init
+//    (void)LIN_DRV_Init(INST_LIN2, &lin2_InitConfig0, &lin2_State);
+//    (void)LIN_DRV_InstallCallback(INST_LIN2, (lin_callback_t)CallbackHandler);
+//
+//    led_all_off();
+//
+//    // poll 200ms
+//    const uint32_t POLL_PERIOD_MS = 200U;
+//    const uint32_t POLL_PERIOD_TICKS = (POLL_PERIOD_MS * 1000U) / LPTMR_TICK_US;
+//    uint32_t lastPollTick = g_tick500us;
+//
+//    for (;;)
+//    {
+//        g_skipPollThisLoop = false;
+//
+//        // 1) LIN FSM 먼저
+//        lin_master_fsm_step();
+//
+//        // 2) UART RX
+//        uart_poll_rx_and_rearm();
+//
+//        uint8_t req_help = 0u;
+//        uint8_t req_status = 0u;
+//        uint8_t req_left = 0u;
+//        uint8_t req_stuck = 0u;
+//        uint8_t req_right = 0u;
+//
+//        char ch;
+//        while (rb_pop(&ch))
+//        {
+//            cmd_feed_char(ch, &req_help, &req_status, &req_left, &req_right, &req_stuck);
+//        }
+//
+//        if (req_help) print_commands_master();
+//
+//        // 3) UART cmds (BUSY면 drop 대신 pendingCmd로 코얼레싱)
+//        if (req_left)
+//        {
+//            g_pendingCmd = true;
+//            g_pendingTarget = MOTOR_TARGET_LEFT;
+//            g_LastSrc = CTRL_CMD;
+//            uart_log_event("[CMD] left");
+//        }
+//        if (req_stuck)
+//        {
+//            g_pendingCmd = true;
+//            g_pendingTarget = MOTOR_TARGET_STUCK;
+//            g_LastSrc = CTRL_CMD;
+//            uart_log_event("[CMD] stuck");
+//        }
+//        if (req_right)
+//        {
+//            g_pendingCmd = true;
+//            g_pendingTarget = MOTOR_TARGET_RIGHT;
+//            g_LastSrc = CTRL_CMD;
+//            uart_log_event("[CMD] right");
+//        }
+//        if (req_status)
+//        {
+//            // status는 1회 요청 플래그만 (중복 발사 방지)
+//            g_pendingStatus = true;
+//            uart_log_event("[CMD] status");
+//        }
+//
+//        // 4) 버튼 이벤트 -> pendingCmd (drop 금지)
+//        if (g_btnLeft)
+//        {
+//            g_btnLeft = false;
+//            g_pendingCmd = true;
+//            g_pendingTarget = MOTOR_TARGET_LEFT;
+//            g_LastSrc = CTRL_BTN;
+//            uart_log_event("[EVENT] BTN12");
+//        }
+//
+//        if (g_btnRight)
+//        {
+//            g_btnRight = false;
+//            g_pendingCmd = true;
+//            g_pendingTarget = MOTOR_TARGET_RIGHT;
+//            g_LastSrc = CTRL_BTN;
+//            uart_log_event("[EVENT] BTN13");
+//        }
+//
+//        // 5) STATUS 수신 완료 처리
+//        if (g_statusRxDone)
+//        {
+//            g_statusRxDone = false;
+//            uart_log_event((g_pendingStatus) ? "TRUE" : "FALSE");
+//            g_pendingStatus = false;
+//
+//            uint8_t pos   = rxStatus[0];
+//            uint8_t range = rxStatus[1];
+//            uint8_t err   = rxStatus[2];
+//            uint8_t ctrl  = rxStatus[3];
+//
+//            uart_status_line(pos, range, err, ctrl);
+//            apply_led_by_range(range);
+//        }
+//
+//        // 6) 에러 로그
+//        if (g_cmdErr)
+//        {
+//            g_cmdErr = false;
+//            uart_log_event("[MASTER] CMD error");
+//            led_green();
+//        }
+//
+//        if (g_statusErr)
+//        {
+//            g_statusErr = false;
+//            uart_log_event("[MASTER] STATUS error");
+//            led_green();
+//            // status는 다시 시도
+//            g_pendingStatus = true;
+//        }
+//
+//        // 7) IDLE에서 우선순위: pendingCmd -> pendingStatus -> periodic poll
+//        if (g_linState == LIN_SM_IDLE)
+//        {
+//            if (g_pendingCmd)
+//            {
+//                g_pendingCmd = false;
+//                if (!master_send_motor_cmd(g_pendingTarget))
+//                {
+//                    // 실패하면 다시 pending으로
+//                    g_pendingCmd = true;
+//                }
+//                g_skipPollThisLoop = true;
+//            }
+//            else if (g_pendingStatus)
+//            {
+//                if (master_request_status())
+//                {
+//                    g_skipPollThisLoop = true;
+//                    // status 요청 했으니 이 루프에서는 poll 금지
+//                }
+//            }
+//            else
+//            {
+//                // periodic poll
+//                uint32_t now = g_tick500us;
+//                if ((uint32_t)(now - lastPollTick) >= POLL_PERIOD_TICKS)
+//                {
+//                    lastPollTick = now;
+//                    (void)master_request_status();
+//                }
+//            }
+//        }
+//
+//        // 8) STATUS timeout recovery (마스터 자체 타임아웃 보호)
+//        if (g_busBusy && (g_waitStatusDeadlineTick != 0U))
+//        {
+//            uint32_t now = g_tick500us;
+//            if ((int32_t)(now - g_waitStatusDeadlineTick) >= 0)
+//            {
+//                lin_master_reset_to_idle();
+//                uart_log_event("[RECOVERY] STATUS deadline -> retry");
+//                g_pendingStatus = true;
+//            }
+//        }
+//    }
+//}
+//
+//// ============================================================
+//// main
+//// ============================================================
+//int main(void)
+//{
+//    CLOCK_SYS_Init(g_clockManConfigsArr, CLOCK_MANAGER_CONFIG_CNT,
+//                   g_clockManCallbacksArr, CLOCK_MANAGER_CALLBACK_CNT);
+//    CLOCK_SYS_UpdateConfiguration(0U, CLOCK_MANAGER_POLICY_AGREEMENT);
+//
+//    PINS_DRV_Init(NUM_OF_CONFIGURED_PINS0, g_pin_mux_InitConfigArr0);
+//
+//#if USE_LIN_XCVR
+//    PINS_DRV_SetPinsDirection(LIN_XCVR_ENABLE_GPIO_PORT, LIN_XCVR_ENABLE_MASK);
+//    PINS_DRV_SetPins(LIN_XCVR_ENABLE_GPIO_PORT, LIN_XCVR_ENABLE_MASK);
+//#endif
+//
+//    // Button IRQ (PORTC)
+//    INT_SYS_InstallHandler(BTN_PORT_IRQn, BTNPORT_IRQHandler, (isr_t *)NULL);
+//    INT_SYS_EnableIRQ(BTN_PORT_IRQn);
+//
+//    // LPTMR
+//    LPTMR_DRV_Init(INST_LPTMR_1, &lptmr_1_config0, false);
+//    INT_SYS_InstallHandler(LPTMR0_IRQn, LPTMR_ISR, (isr_t *)NULL);
+//    INT_SYS_EnableIRQ(LPTMR0_IRQn);
+//    LPTMR_DRV_StartCounter(INST_LPTMR_1);
+//
+//    lin_master_task();
+//
+//    for (;;)
+//    {
+//        if (exit_code != 0) break;
+//    }
+//    return exit_code;
+//}
+//
+//
+//////////////////////////////////////////////////////////////////////////////
+//#include "sdk_project_config.h"
+//
+//#include <stdint.h>
+//#include <stdbool.h>
+//#include <string.h>
+//#include <stdio.h>
+//
+//volatile int exit_code = 0;
+//
+//// ============================================================
+//// EVB LED (active-low)
+//// ============================================================
+//#define PORT_LED0_INDEX           (0u)    // PTD0 (Blue)  active-low
+//#define PORT_LED1_INDEX           (15u)   // PTD15 (Red)  active-low
+//#define PORT_LED2_INDEX           (16u)   // PTD16 (Green)active-low
+//#define LED_GPIO_PORT             (PTD)
+//
+//// ============================================================
+//// Buttons: PTC12 / PTC13
+////   BTN12: LEFT
+////   BTN13: RIGHT
+//// ============================================================
+//#define PORT_BTN_LEFT_INDEX       (12u)   // PTC12
+//#define PORT_BTN_RIGHT_INDEX      (13u)   // PTC13
+//#define BTN_PORT_NAME             (PORTC)
+//#define BTN_PORT_IRQn             (PORTC_IRQn)
+//
+//// ============================================================
+//// LIN XCVR enable
+//// ============================================================
+//#define USE_LIN_XCVR              (1U)
+//#define LIN_XCVR_ENABLE_PIN       (9UL)
+//#define LIN_XCVR_ENABLE_MASK      (0x1u << LIN_XCVR_ENABLE_PIN)
+//#define LIN_XCVR_ENABLE_GPIO_PORT (PTE)
+//
+//// ============================================================
+//// LPTMR time base
+//// ============================================================
+//#define TIMER_COMPARE_VAL             (uint16_t)(2000U)
+//#define TIMER_TICKS_1US               (uint16_t)(4U)
+//#define LPTMR_TICK_US                 (500U)      // 0.5ms/tick
+//
+//// ============================================================
+//// LIN
+//// ============================================================
+//#define DATA_SIZE                     (8U)
+//#define FRAME_MOTOR_CMD               (1U)   // Master -> Slave (TX)
+//#define FRAME_SLAVE_STATUS            (2U)   // Slave -> Master (RX)
+//#define TIMEOUT_LIN_CNT               (500U) // LIN timeout counter
+//
+//// CMD payload
+//#define MOTOR_TARGET_LEFT             (0U)
+//#define MOTOR_TARGET_RIGHT            (1U)
+//#define MOTOR_TARGET_STUCK            (2U)
+//
+//// STATUS payload
+//#define RANGE_OPEN                    (0U)
+//#define RANGE_STUCK                   (1U)
+//#define RANGE_CLOSE                   (2U)
+//
+//// STATUS control (slave reports)
+//#define CTRL_BTN                      (0U)
+//#define CTRL_CMD                      (1U)
+//#define CTRL_POT                      (2U)
+//
+//// ============================================================
+//// UART
+//// ============================================================
+//#define UART_INST                     (INST_LPUART_1)
+//
+//// ============================================================
+//// LPTMR counters
+//// ============================================================
+//static uint16_t timerOverflowInterruptCount = 0U;
+//static volatile uint32_t g_tick500us = 0U;
+//
+//// ============================================================
+//// Buffers
+//// ============================================================
+//static uint8_t g_txCmd[DATA_SIZE] = {0};
+//static uint8_t g_rxStatus[DATA_SIZE] = {0};
+//
+//// ============================================================
+//// debug
+//// ============================================================
+//static volatile uint8_t g_lastEvent = 0U;
+//static volatile uint8_t g_linErrCode = 0U; // 1 PID,2 CHK,3 READBACK,4 FRAME,5 TIMEOUT
+//
+//// ============================================================
+//// Critical section helper
+//// ============================================================
+//static inline void ENTER_CRITICAL(void) { INT_SYS_DisableIRQGlobal(); }
+//static inline void EXIT_CRITICAL(void)  { INT_SYS_EnableIRQGlobal();  }
+//
+//// ============================================================
+//// LED helpers (active-low)
+//// ============================================================
+//static void led_all_off(void)
+//{
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED0_INDEX, 1U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED1_INDEX, 1U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED2_INDEX, 1U);
+//}
+//
+//static void led_blue(void)
+//{
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED0_INDEX, 0U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED1_INDEX, 1U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED2_INDEX, 1U);
+//}
+//
+//static void led_green(void)
+//{
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED0_INDEX, 1U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED1_INDEX, 1U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED2_INDEX, 0U);
+//}
+//
+//static void led_red(void)
+//{
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED0_INDEX, 1U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED1_INDEX, 0U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED2_INDEX, 1U);
+//}
+//
+//static void led_yellow(void)
+//{
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED0_INDEX, 1U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED1_INDEX, 0U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED2_INDEX, 0U);
+//}
+//
+//static void apply_led_by_range(uint8_t range)
+//{
+//    switch (range)
+//    {
+//        case RANGE_OPEN:  led_blue();   break;
+//        case RANGE_STUCK: led_yellow(); break;
+//        case RANGE_CLOSE: led_red();    break;
+//        default:          led_all_off();break;
+//    }
+//}
+//
+//// ============================================================
+//// UART helpers (TX)
+//// ============================================================
+//static void uart_send_bytes(const uint8_t *data, uint32_t len)
+//{
+//    uint32_t rem = 0u;
+//    while (LPUART_DRV_GetTransmitStatus(UART_INST, &rem) == STATUS_BUSY)
+//    {
+//        __asm("nop");
+//    }
+//    (void)LPUART_DRV_SendData(UART_INST, data, len);
+//}
+//
+//static void uart_send_char(char c)
+//{
+//    uart_send_bytes((const uint8_t *)&c, 1u);
+//}
+//
+//static void uart_send_string(const char *s)
+//{
+//    while (*s) { uart_send_char(*s++); }
+//}
+//
+//static void uart_log_event(const char *msg)
+//{
+//    uart_send_string("\r\n");
+//    uart_send_string(msg);
+//    uart_send_string("\r\n");
+//}
+//
+//static const char *range_str(uint8_t r)
+//{
+//    switch (r)
+//    {
+//        case RANGE_OPEN:  return "OPEN";
+//        case RANGE_STUCK: return "STUCK";
+//        case RANGE_CLOSE: return "CLOSE";
+//        default:          return "UNK";
+//    }
+//}
+//
+//static const char *control_str(uint8_t ctrl)
+//{
+//    switch (ctrl)
+//    {
+//        case CTRL_BTN: return "BTN";
+//        case CTRL_CMD: return "CMD";
+//        case CTRL_POT: return "POT";
+//        default:       return "UNK";
+//    }
+//}
+//
+//static const char *lin_err_str(uint8_t e)
+//{
+//    switch (e)
+//    {
+//        case 0: return "NONE";
+//        case 1: return "PID";
+//        case 2: return "CHECKSUM";
+//        case 3: return "READBACK";
+//        case 4: return "FRAME";
+//        case 5: return "TIMEOUT";
+//        default:return "UNK";
+//    }
+//}
+//
+//static void uart_status_line(uint8_t posPercent, uint8_t range, uint8_t err, uint8_t ctrl)
+//{
+//    char line[160];
+//    (void)snprintf(line, sizeof(line),
+//                   "\r\n[SLAVE] POS=%3u%% RANGE=%-5s CONTROL=%-3s ERR=0x%02X  cbEvent=%u  linErr=%s",
+//                   (unsigned)posPercent,
+//                   range_str(range),
+//                   control_str(ctrl),
+//                   (unsigned)err,
+//                   (unsigned)g_lastEvent,
+//                   lin_err_str(g_linErrCode));
+//    uart_send_string(line);
+//}
+//
+//static void print_commands_master(void)
+//{
+//    uart_send_string("\r\nCommands:\r\n");
+//    uart_send_string("  left   (or l)  : send MOTOR LEFT\r\n");
+//    uart_send_string("  stuck  (or st) : send MOTOR STUCK\r\n");
+//    uart_send_string("  right  (or r)  : send MOTOR RIGHT\r\n");
+//    uart_send_string("  status (or s)  : request slave status now\r\n");
+//    uart_send_string("  help   (or h)  : show this\r\n");
+//    uart_send_string("\r\n");
+//}
+//
+//// ============================================================
+//// UART RX ring buffer (1-byte receive re-armed)
+//// ============================================================
+//#define RX_BUF_SIZE (128u)
+//
+//static volatile char g_rx_buf[RX_BUF_SIZE];
+//static volatile uint16_t g_rx_w = 0u;
+//static volatile uint16_t g_rx_r = 0u;
+//
+//static inline uint16_t rb_next(uint16_t x)
+//{
+//    return (uint16_t)((x + 1u) % RX_BUF_SIZE);
+//}
+//
+//static void rb_push(char c)
+//{
+//    uint16_t nw = rb_next(g_rx_w);
+//    if (nw == g_rx_r) return; // overflow drop
+//    g_rx_buf[g_rx_w] = c;
+//    g_rx_w = nw;
+//}
+//
+//static int rb_pop(char *out)
+//{
+//    if (g_rx_r == g_rx_w) return 0;
+//    *out = g_rx_buf[g_rx_r];
+//    g_rx_r = rb_next(g_rx_r);
+//    return 1;
+//}
+//
+//static uint8_t g_rx_byte = 0u;
+//static volatile bool g_rx_armed = false;
+//
+//static void uart_arm_rx_1byte(void)
+//{
+//    if (g_rx_armed) return;
+//
+//    status_t st = LPUART_DRV_ReceiveData(UART_INST, &g_rx_byte, 1u);
+//    if (st == STATUS_SUCCESS)
+//        g_rx_armed = true;
+//}
+//
+//static void uart_poll_rx_and_rearm(void)
+//{
+//    if (!g_rx_armed)
+//    {
+//        uart_arm_rx_1byte();
+//        return;
+//    }
+//
+//    uint32_t rem = 0u;
+//    status_t st = LPUART_DRV_GetReceiveStatus(UART_INST, &rem);
+//
+//    if (st == STATUS_SUCCESS)
+//    {
+//        rb_push((char)g_rx_byte);
+//        g_rx_armed = false;
+//        uart_arm_rx_1byte();
+//    }
+//    else if (st == STATUS_BUSY)
+//    {
+//        // receiving...
+//    }
+//    else
+//    {
+//        (void)LPUART_DRV_AbortReceivingData(UART_INST);
+//        g_rx_armed = false;
+//        uart_arm_rx_1byte();
+//    }
+//}
+//
+//// ============================================================
+//// CMD parser (line-based)
+//// ============================================================
+//#define CMD_BUF_SIZE (32u)
+//static char g_cmd_buf[CMD_BUF_SIZE];
+//static uint32_t g_cmd_len = 0u;
+//
+//static void cmd_reset(void)
+//{
+//    g_cmd_len = 0u;
+//    g_cmd_buf[0] = '\0';
+//}
+//
+//static void cmd_feed_char(char ch,
+//                          uint8_t *req_help,
+//                          uint8_t *req_status,
+//                          uint8_t *req_left,
+//                          uint8_t *req_right,
+//                          uint8_t *req_stuck)
+//{
+//    if (ch == '\r' || ch == '\n')
+//    {
+//        g_cmd_buf[g_cmd_len] = '\0';
+//
+//        if (strcmp(g_cmd_buf, "help") == 0 || strcmp(g_cmd_buf, "h") == 0)
+//            *req_help = 1u;
+//        else if (strcmp(g_cmd_buf, "status") == 0 || strcmp(g_cmd_buf, "s") == 0)
+//            *req_status = 1u;
+//        else if (strcmp(g_cmd_buf, "left") == 0 || strcmp(g_cmd_buf, "l") == 0)
+//            *req_left = 1u;
+//        else if (strcmp(g_cmd_buf, "right") == 0 || strcmp(g_cmd_buf, "r") == 0)
+//            *req_right = 1u;
+//        else if (strcmp(g_cmd_buf, "stuck") == 0 || strcmp(g_cmd_buf, "st") == 0)
+//            *req_stuck = 1u;
+//        else if (g_cmd_buf[0] != '\0')
+//            uart_log_event("[ERR] unknown cmd (help)");
+//
+//        cmd_reset();
+//        return;
+//    }
+//
+//    if (ch >= 'A' && ch <= 'Z') ch = (char)(ch - 'A' + 'a');
+//
+//    if (g_cmd_len < (CMD_BUF_SIZE - 1u))
+//        g_cmd_buf[g_cmd_len++] = ch;
+//}
+//
+//// ============================================================
+//// LPTMR ISR
+//// ============================================================
+//void LPTMR_ISR(void)
+//{
+//    LIN_DRV_TimeoutService(INST_LIN2);
+//    g_tick500us++;
+//    timerOverflowInterruptCount++;
+//    LPTMR_DRV_ClearCompareFlag(INST_LPTMR_1);
+//}
+//
+//uint32_t lin1TimerGetTimeIntervalCallback0(uint32_t *ns)
+//{
+//    static uint32_t previousCountValue = 0UL;
+//    uint32_t counterValue;
+//
+//    counterValue = LPTMR_DRV_GetCounterValueByCount(INST_LPTMR_1);
+//    *ns = ((uint32_t)(counterValue + timerOverflowInterruptCount * TIMER_COMPARE_VAL - previousCountValue))
+//            * 1000U / TIMER_TICKS_1US;
+//
+//    timerOverflowInterruptCount = 0UL;
+//    previousCountValue = counterValue;
+//    return 0UL;
+//}
+//
+//// ============================================================
+//// Button ISR
+//// ============================================================
+//static volatile bool g_btnLeft = false;
+//static volatile bool g_btnRight = false;
+//
+//void BTNPORT_IRQHandler(void)
+//{
+//    uint32_t flags = PINS_DRV_GetPortIntFlag(BTN_PORT_NAME);
+//
+//    if (flags & (1UL << PORT_BTN_LEFT_INDEX))
+//    {
+//        g_btnLeft = true;
+//        PINS_DRV_ClearPinIntFlagCmd(BTN_PORT_NAME, PORT_BTN_LEFT_INDEX);
+//    }
+//
+//    if (flags & (1UL << PORT_BTN_RIGHT_INDEX))
+//    {
+//        g_btnRight = true;
+//        PINS_DRV_ClearPinIntFlagCmd(BTN_PORT_NAME, PORT_BTN_RIGHT_INDEX);
+//    }
+//}
+//
+//// ============================================================
+//// Frame Definition + Scheduler Table
+//// ============================================================
+//typedef enum { LIN_DIR_TX = 0, LIN_DIR_RX = 1 } lin_dir_t;
+//
+//typedef struct
+//{
+//    uint8_t    id;
+//    lin_dir_t  dir;
+//    uint8_t   *buf;
+//    uint8_t    len;
+//    uint16_t   timeoutCnt;
+//} lin_frame_def_t;
+//
+//enum
+//{
+//    FRAME_IDX_CMD = 0,
+//    FRAME_IDX_STATUS,
+//    FRAME_IDX_COUNT
+//};
+//
+//static lin_frame_def_t g_frames[FRAME_IDX_COUNT] =
+//{
+//    { .id = FRAME_MOTOR_CMD,    .dir = LIN_DIR_TX, .buf = g_txCmd,    .len = DATA_SIZE, .timeoutCnt = TIMEOUT_LIN_CNT },
+//    { .id = FRAME_SLAVE_STATUS, .dir = LIN_DIR_RX, .buf = g_rxStatus, .len = DATA_SIZE, .timeoutCnt = TIMEOUT_LIN_CNT }
+//};
+//
+//typedef struct
+//{
+//    uint8_t   frameIndex;
+//    uint32_t  periodTicks;   // 0이면 비주기
+//    uint32_t  nextDueTick;
+//    uint8_t   priority;      // 작을수록 높음
+//    bool      enabled;
+//} lin_sched_entry_t;
+//
+//// 200ms = 200000us / 500us = 400 ticks
+//#define TICKS_200MS (400U)
+//
+//enum
+//{
+//    SCHED_STATUS_POLL = 0,
+//    SCHED_COUNT
+//};
+//
+//static lin_sched_entry_t g_sched[SCHED_COUNT] =
+//{
+//    { .frameIndex = FRAME_IDX_STATUS, .periodTicks = TICKS_200MS, .nextDueTick = 0U, .priority = 10U, .enabled = true }
+//};
+//
+//static void scheduler_init(uint32_t nowTick)
+//{
+//    for (uint32_t i = 0; i < SCHED_COUNT; i++)
+//    {
+//        if (!g_sched[i].enabled) continue;
+//        g_sched[i].nextDueTick = nowTick + g_sched[i].periodTicks;
+//    }
+//}
+//
+//static int32_t scheduler_pick_due(uint32_t nowTick)
+//{
+//    int32_t best = -1;
+//    uint8_t bestPrio = 0xFFU;
+//
+//    for (uint32_t i = 0; i < SCHED_COUNT; i++)
+//    {
+//        if (!g_sched[i].enabled) continue;
+//        if (g_sched[i].periodTicks == 0U) continue;
+//
+//        if ((int32_t)(nowTick - g_sched[i].nextDueTick) >= 0)
+//        {
+//            if (g_sched[i].priority < bestPrio)
+//            {
+//                bestPrio = g_sched[i].priority;
+//                best = (int32_t)i;
+//            }
+//        }
+//    }
+//    return best;
+//}
+//
+//static void scheduler_on_fired(uint32_t schedIndex, uint32_t nowTick)
+//{
+//    if (g_sched[schedIndex].periodTicks != 0U)
+//        g_sched[schedIndex].nextDueTick = nowTick + g_sched[schedIndex].periodTicks;
+//}
+//
+//// ============================================================
+//// Request object (transaction)
+//// ============================================================
+//typedef enum
+//{
+//    REQ_SRC_BTN = 0,
+//    REQ_SRC_UART,
+//    REQ_SRC_PERIODIC
+//} req_source_t;
+//
+//typedef enum
+//{
+//    REQ_TYPE_NONE = 0,
+//    REQ_TYPE_CMD,
+//    REQ_TYPE_STATUS
+//} req_type_t;
+//
+//typedef struct
+//{
+//    req_type_t   type;
+//    req_source_t src;
+//    uint8_t      frameIndex;
+//
+//    uint8_t      maxRetry;
+//    uint8_t      retryCount;
+//    uint32_t     deadlineTick; // 0이면 app deadline 미사용
+//} lin_req_t;
+//
+//// ============================================================
+//// Input coalescing (last-wins)
+//// ============================================================
+//static volatile bool    g_cmdPending = false;
+//static volatile uint8_t g_cmdTarget  = MOTOR_TARGET_LEFT;
+//static volatile req_source_t g_cmdSrc = REQ_SRC_UART;
+//
+//static volatile bool g_userStatusPending = false;
+//
+//// ============================================================
+//// LIN Engine FSM (single in-flight request)
+//// ============================================================
+//typedef enum
+//{
+//    ENG_IDLE = 0,
+//    ENG_WAIT_PID,
+//    ENG_WAIT_TX,
+//    ENG_WAIT_RX
+//} lin_eng_state_t;
+//
+//static volatile lin_eng_state_t g_engState = ENG_IDLE;
+//
+//static volatile uint8_t g_activeFrameIndex = 0U;
+//static volatile lin_req_t g_activeReq;
+//
+//// callback flags
+//#define LIN_F_PID_OK   (1UL << 0)
+//#define LIN_F_TX_DONE  (1UL << 1)
+//#define LIN_F_RX_DONE  (1UL << 2)
+//#define LIN_F_ERROR    (1UL << 3)
+//#define LIN_F_TIMEOUT  (1UL << 4)
+//static volatile uint32_t g_linFlags = 0U;
+//
+//// ============================================================
+//// LIN Callback: flags only
+//// ============================================================
+//lin_callback_t CallbackHandler(uint32_t instance, lin_state_t *linState)
+//{
+//    lin_callback_t ret = linState->Callback;
+//    (void)instance;
+//
+//    if (linState->timeoutCounterFlag)
+//    {
+//        linState->timeoutCounterFlag = false;
+//        g_linFlags |= (LIN_F_TIMEOUT | LIN_F_ERROR);
+//        g_linErrCode = 5;
+//        return ret;
+//    }
+//
+//    g_lastEvent = (uint8_t)linState->currentEventId;
+//
+//    switch (linState->currentEventId)
+//    {
+//        case LIN_PID_OK:        g_linFlags |= LIN_F_PID_OK;  break;
+//        case LIN_TX_COMPLETED:  g_linFlags |= LIN_F_TX_DONE; break;
+//        case LIN_RX_COMPLETED:  g_linFlags |= LIN_F_RX_DONE; break;
+//
+//        case LIN_PID_ERROR:        g_linFlags |= LIN_F_ERROR; g_linErrCode = 1; break;
+//        case LIN_CHECKSUM_ERROR:   g_linFlags |= LIN_F_ERROR; g_linErrCode = 2; break;
+//        case LIN_READBACK_ERROR:   g_linFlags |= LIN_F_ERROR; g_linErrCode = 3; break;
+//        case LIN_FRAME_ERROR:      g_linFlags |= LIN_F_ERROR; g_linErrCode = 4; break;
+//
+//        default: break;
+//    }
+//
+//    return ret;
+//}
+//
+//static void engine_reset_to_idle(void)
+//{
+//    (void)LIN_DRV_GotoIdleState(INST_LIN2);
+//    g_engState = ENG_IDLE;
+//
+//    ENTER_CRITICAL();
+//    g_linFlags = 0U;
+//    EXIT_CRITICAL();
+//}
+//
+//static bool engine_start_request(const lin_req_t *req)
+//{
+//    if (g_engState != ENG_IDLE) return false;
+//
+//    g_activeReq = *req;
+//    g_activeFrameIndex = req->frameIndex;
+//
+//    (void)LIN_DRV_MasterSendHeader(INST_LIN2, g_frames[g_activeFrameIndex].id);
+//    g_engState = ENG_WAIT_PID;
+//    return true;
+//}
+//
+//// 완료 후처리: 여기서 UART/LED 반영 + 정책(예: CMD 후 STATUS 1회 요청)
+//static void on_request_done(const lin_req_t *req, bool ok)
+//{
+//    if (!ok)
+//    {
+//        uart_log_event("[LIN] request FAILED");
+//        led_green();
+//        return;
+//    }
+//
+//    if (req->type == REQ_TYPE_STATUS)
+//    {
+//        uint8_t pos   = g_rxStatus[0];
+//        uint8_t range = g_rxStatus[1];
+//        uint8_t err   = g_rxStatus[2];
+//        uint8_t ctrl  = g_rxStatus[3];
+//
+//        uart_status_line(pos, range, err, ctrl);
+//        apply_led_by_range(range);
+//        return;
+//    }
+//
+//    if (req->type == REQ_TYPE_CMD)
+//    {
+//        uart_log_event("[LIN] CMD OK -> sync STATUS once");
+//        // CMD 성공 후 상태 1회 동기화 (좋은 운용 정책)
+//        g_userStatusPending = true;
+//        return;
+//    }
+//}
+//
+//// 엔진 step: callback flag 스냅샷 후 FSM 진행
+//static void engine_step(void)
+//{
+//    // flags snapshot
+//    uint32_t flags;
+//    ENTER_CRITICAL();
+//    flags = g_linFlags;
+//    g_linFlags = 0U;
+//    EXIT_CRITICAL();
+//
+//    // app-level deadline (optional)
+//    if (g_engState != ENG_IDLE && g_activeReq.deadlineTick != 0U)
+//    {
+//        uint32_t now = (uint32_t)g_tick500us;
+//        if ((int32_t)(now - g_activeReq.deadlineTick) >= 0)
+//        {
+//            uart_log_event("[LIN] DEADLINE EXPIRED");
+//            on_request_done((const lin_req_t *)&g_activeReq, false);
+//            engine_reset_to_idle();
+//            return;
+//        }
+//    }
+//
+//    // error handling + retry
+//    if (flags & LIN_F_ERROR)
+//    {
+//        char msg[96];
+//        (void)snprintf(msg, sizeof(msg),
+//                       "[LIN] ERROR: linErr=%s cbEvent=%u retry=%u/%u",
+//                       lin_err_str(g_linErrCode),
+//                       (unsigned)g_lastEvent,
+//                       (unsigned)g_activeReq.retryCount,
+//                       (unsigned)g_activeReq.maxRetry);
+//        uart_log_event(msg);
+//
+//        if (g_activeReq.retryCount < g_activeReq.maxRetry)
+//        {
+//            g_activeReq.retryCount++;
+//
+//            engine_reset_to_idle();
+//            (void)engine_start_request((const lin_req_t *)&g_activeReq);
+//            return;
+//        }
+//
+//        on_request_done((const lin_req_t *)&g_activeReq, false);
+//        engine_reset_to_idle();
+//        return;
+//    }
+//
+//    // WAIT_PID -> send/recv
+//    if (g_engState == ENG_WAIT_PID)
+//    {
+//        if (flags & LIN_F_PID_OK)
+//        {
+//            LIN_DRV_SetTimeoutCounter(INST_LIN2, g_frames[g_activeFrameIndex].timeoutCnt);
+//
+//            if (g_frames[g_activeFrameIndex].dir == LIN_DIR_TX)
+//            {
+//                (void)LIN_DRV_SendFrameData(INST_LIN2,
+//                                            g_frames[g_activeFrameIndex].buf,
+//                                            g_frames[g_activeFrameIndex].len);
+//                g_engState = ENG_WAIT_TX;
+//            }
+//            else
+//            {
+//                (void)LIN_DRV_ReceiveFrameData(INST_LIN2,
+//                                               g_frames[g_activeFrameIndex].buf,
+//                                               g_frames[g_activeFrameIndex].len);
+//                g_engState = ENG_WAIT_RX;
+//            }
+//        }
+//        return;
+//    }
+//
+//    // WAIT_TX -> done
+//    if (g_engState == ENG_WAIT_TX)
+//    {
+//        if (flags & LIN_F_TX_DONE)
+//        {
+//            on_request_done((const lin_req_t *)&g_activeReq, true);
+//            engine_reset_to_idle();
+//        }
+//        return;
+//    }
+//
+//    // WAIT_RX -> done
+//    if (g_engState == ENG_WAIT_RX)
+//    {
+//        if (flags & LIN_F_RX_DONE)
+//        {
+//            on_request_done((const lin_req_t *)&g_activeReq, true);
+//            engine_reset_to_idle();
+//        }
+//        return;
+//    }
+//}
+//
+//// ============================================================
+//// Dispatcher: choose next request
+//// priority: CMD(event) > STATUS(user) > STATUS(periodic)
+//// ============================================================
+//static bool dispatcher_make_next_request(lin_req_t *outReq, uint32_t nowTick, int32_t *outSchedIndex)
+//{
+//    *outSchedIndex = -1;
+//    memset(outReq, 0, sizeof(*outReq));
+//
+//    // 1) CMD pending
+//    if (g_cmdPending)
+//    {
+//        uint8_t tgt = g_cmdTarget;
+//        req_source_t src = g_cmdSrc;
+//        g_cmdPending = false;
+//
+//        // payload build
+//        memset(g_txCmd, 0, sizeof(g_txCmd));
+//        g_txCmd[0] = tgt;
+//
+//        outReq->type = REQ_TYPE_CMD;
+//        outReq->src  = src;
+//        outReq->frameIndex = FRAME_IDX_CMD;
+//
+//        outReq->maxRetry = 1U;         // CMD retry는 최소로 (last-wins)
+//        outReq->retryCount = 0U;
+//        outReq->deadlineTick = nowTick + 300U; // 150ms
+//        return true;
+//    }
+//
+//    // 2) user status pending
+//    if (g_userStatusPending)
+//    {
+//        g_userStatusPending = false;
+//
+//        outReq->type = REQ_TYPE_STATUS;
+//        outReq->src  = REQ_SRC_UART;
+//        outReq->frameIndex = FRAME_IDX_STATUS;
+//
+//        outReq->maxRetry = 2U;
+//        outReq->retryCount = 0U;
+//        outReq->deadlineTick = nowTick + 400U; // 200ms
+//        return true;
+//    }
+//
+//    // 3) periodic schedule
+//    int32_t si = scheduler_pick_due(nowTick);
+//    if (si >= 0)
+//    {
+//        *outSchedIndex = si;
+//
+//        outReq->type = REQ_TYPE_STATUS;
+//        outReq->src  = REQ_SRC_PERIODIC;
+//        outReq->frameIndex = g_sched[si].frameIndex;
+//
+//        outReq->maxRetry = 1U;
+//        outReq->retryCount = 0U;
+//        outReq->deadlineTick = nowTick + 400U;
+//        return true;
+//    }
+//
+//    return false;
+//}
+//
+//// ============================================================
+//// Input hooks
+//// ============================================================
+//static void request_motor_target(req_source_t src, uint8_t target)
+//{
+//    if (target > MOTOR_TARGET_STUCK) target = MOTOR_TARGET_STUCK;
+//
+//    g_cmdSrc = src;
+//    g_cmdTarget = target;
+//    g_cmdPending = true; // last-wins
+//}
+//
+//static void request_status_now(req_source_t src)
+//{
+//    (void)src;
+//    g_userStatusPending = true; // coalesce
+//}
+//
+//// ============================================================
+//// Master task (integrated)
+//// ============================================================
+//static void lin_master_task(void)
+//{
+//    // UART init
+//    (void)LPUART_DRV_Init(UART_INST, &lpUartState1, &lpuart_1_InitConfig0);
+//
+//    uart_send_string("\r\n=== LIN MASTER (SCHED TABLE) START ===\r\n");
+//    uart_send_string("BTN12: MOTOR LEFT, BTN13: MOTOR RIGHT\r\n");
+//    uart_send_string("UART cmd: left/right/stuck/status/help\r\n");
+//    print_commands_master();
+//
+//    // UART RX start
+//    g_rx_armed = false;
+//    uart_arm_rx_1byte();
+//    cmd_reset();
+//
+//    // LIN init
+//    (void)LIN_DRV_Init(INST_LIN2, &lin2_InitConfig0, &lin2_State);
+//    (void)LIN_DRV_InstallCallback(INST_LIN2, (lin_callback_t)CallbackHandler);
+//
+//    led_all_off();
+//
+//    // scheduler init
+//    scheduler_init((uint32_t)g_tick500us);
+//    engine_reset_to_idle();
+//
+//    for (;;)
+//    {
+//        // 1) engine first (consume flags)
+//        engine_step();
+//
+//        // 2) UART RX poll
+//        uart_poll_rx_and_rearm();
+//
+//        // 3) parse commands
+//        uint8_t req_help = 0u;
+//        uint8_t req_status = 0u;
+//        uint8_t req_left = 0u;
+//        uint8_t req_stuck = 0u;
+//        uint8_t req_right = 0u;
+//
+//        char ch;
+//        while (rb_pop(&ch))
+//        {
+//            cmd_feed_char(ch, &req_help, &req_status, &req_left, &req_right, &req_stuck);
+//        }
+//
+//        if (req_help) print_commands_master();
+//
+//        // 4) commands -> requests (no direct LIN here)
+//        if (req_left)
+//        {
+//            uart_log_event("[CMD] left");
+//            request_motor_target(REQ_SRC_UART, MOTOR_TARGET_LEFT);
+//        }
+//        if (req_stuck)
+//        {
+//            uart_log_event("[CMD] stuck");
+//            request_motor_target(REQ_SRC_UART, MOTOR_TARGET_STUCK);
+//        }
+//        if (req_right)
+//        {
+//            uart_log_event("[CMD] right");
+//            request_motor_target(REQ_SRC_UART, MOTOR_TARGET_RIGHT);
+//        }
+//        if (req_status)
+//        {
+//            uart_log_event("[CMD] status");
+//            request_status_now(REQ_SRC_UART);
+//        }
+//
+//        // 5) buttons -> requests
+//        if (g_btnLeft)
+//        {
+//            g_btnLeft = false;
+//            uart_log_event("[EVENT] BTN12");
+//            request_motor_target(REQ_SRC_BTN, MOTOR_TARGET_LEFT);
+//        }
+//        if (g_btnRight)
+//        {
+//            g_btnRight = false;
+//            uart_log_event("[EVENT] BTN13");
+//            request_motor_target(REQ_SRC_BTN, MOTOR_TARGET_RIGHT);
+//        }
+//
+//        // 6) if engine idle, dispatch next request
+//        if (g_engState == ENG_IDLE)
+//        {
+//            lin_req_t req;
+//            int32_t schedIndex;
+//            uint32_t now = (uint32_t)g_tick500us;
+//
+//            if (dispatcher_make_next_request(&req, now, &schedIndex))
+//            {
+//                if (engine_start_request(&req))
+//                {
+//                    if (schedIndex >= 0)
+//                        scheduler_on_fired((uint32_t)schedIndex, now);
+//                }
+//            }
+//        }
+//
+//        if (exit_code != 0) break;
+//    }
+//}
+//
+//// ============================================================
+//// main
+//// ============================================================
+//int main(void)
+//{
+//    CLOCK_SYS_Init(g_clockManConfigsArr, CLOCK_MANAGER_CONFIG_CNT,
+//                   g_clockManCallbacksArr, CLOCK_MANAGER_CALLBACK_CNT);
+//    CLOCK_SYS_UpdateConfiguration(0U, CLOCK_MANAGER_POLICY_AGREEMENT);
+//
+//    PINS_DRV_Init(NUM_OF_CONFIGURED_PINS0, g_pin_mux_InitConfigArr0);
+//
+//#if USE_LIN_XCVR
+//    PINS_DRV_SetPinsDirection(LIN_XCVR_ENABLE_GPIO_PORT, LIN_XCVR_ENABLE_MASK);
+//    PINS_DRV_SetPins(LIN_XCVR_ENABLE_GPIO_PORT, LIN_XCVR_ENABLE_MASK);
+//#endif
+//
+//    // Button IRQ (PORTC)
+//    INT_SYS_InstallHandler(BTN_PORT_IRQn, BTNPORT_IRQHandler, (isr_t *)NULL);
+//    INT_SYS_EnableIRQ(BTN_PORT_IRQn);
+//
+//    // LPTMR
+//    LPTMR_DRV_Init(INST_LPTMR_1, &lptmr_1_config0, false);
+//    INT_SYS_InstallHandler(LPTMR0_IRQn, LPTMR_ISR, (isr_t *)NULL);
+//    INT_SYS_EnableIRQ(LPTMR0_IRQn);
+//    LPTMR_DRV_StartCounter(INST_LPTMR_1);
+//
+//    lin_master_task();
+//
+//    for (;;)
+//    {
+//        if (exit_code != 0) break;
+//    }
+//    return exit_code;
+//}
+//////////////////////////////////////////////////////////////////////
+//#include "sdk_project_config.h"
+//
+//#include <stdint.h>
+//#include <stdbool.h>
+//#include <string.h>
+//#include <stdio.h>
+//
+//volatile int exit_code = 0;
+//
+//// ============================================================
+//// EVB LED (active-low)
+//// ============================================================
+//#define PORT_LED0_INDEX           (0u)    // PTD0 (Blue)  active-low
+//#define PORT_LED1_INDEX           (15u)   // PTD15 (Red)   active-low
+//#define PORT_LED2_INDEX           (16u)   // PTD16 (Green) active-low
+//#define LED_GPIO_PORT             (PTD)
+//
+//// ============================================================
+//// Buttons: PTC12 / PTC13
+////   BTN12: OPEN
+////   BTN13: CLOSE
+//// ============================================================
+//#define PORT_BTN_OPEN_INDEX       (12u)   // PTC12
+//#define PORT_BTN_CLOSE_INDEX      (13u)   // PTC13
+//#define BTN_PORT_NAME             (PORTC)
+//#define BTN_PORT_IRQn             (PORTC_IRQn)
+//
+//// ============================================================
+//// LIN XCVR enable
+//// ============================================================
+//#define USE_LIN_XCVR              (1U)
+//#define LIN_XCVR_ENABLE_PIN       (9UL)
+//#define LIN_XCVR_ENABLE_MASK      (0x1u << LIN_XCVR_ENABLE_PIN)
+//#define LIN_XCVR_ENABLE_GPIO_PORT (PTE)
+//
+//// ============================================================
+//// LPTMR time base
+//// ============================================================
+//#define TIMER_COMPARE_VAL             (uint16_t)(2000U)
+//#define TIMER_TICKS_1US               (uint16_t)(4U)
+//#define LPTMR_TICK_US                 (500U)      // 0.5ms/tick
+//
+//// ============================================================
+//// LIN
+//// ============================================================
+//#define DATA_SIZE                     (8U)
+//#define FRAME_MOTOR_CMD               (1U)   // Master -> Slave (TX)
+//#define FRAME_SLAVE_STATUS            (2U)   // Slave -> Master (RX)
+//#define TIMEOUT_LIN_CNT               (500U) // LIN timeout counter
+//
+//// CMD payload
+//#define MOTOR_TARGET_LEFT             (0U) // OPEN
+//#define MOTOR_TARGET_RIGHT            (1U) // CLOSE
+//#define MOTOR_TARGET_STUCK            (2U)
+//
+//// STATUS payload
+//#define RANGE_OPEN                    (0U)
+//#define RANGE_STUCK                   (1U)
+//#define RANGE_CLOSE                   (2U)
+//
+//// STATUS control (slave reports)
+//#define CTRL_BTN                      (0U)
+//#define CTRL_CMD                      (1U)
+//#define CTRL_POT                      (2U)
+//
+//// ============================================================
+//// UART
+//// ============================================================
+//#define UART_INST                     (INST_LPUART_1)
+//
+//// ============================================================
+//// LPTMR counters
+//// ============================================================
+//// FIX: ISR/Callback 공유 => volatile + (callback에서) 크리티컬로 읽고 0 처리
+//static volatile uint16_t timerOverflowInterruptCount = 0U;
+//static volatile uint32_t g_tick500us = 0U;
+//
+//// ============================================================
+//// Buffers
+//// ============================================================
+//static uint8_t g_txCmd[DATA_SIZE]    = {0};
+//static uint8_t g_rxStatus[DATA_SIZE] = {0};
+//
+//// ============================================================
+//// debug (LIN)
+//// ============================================================
+//static volatile uint8_t g_lastEvent  = 0U;
+//static volatile uint8_t g_linErrCode = 0U; // 1 PID,2 CHK,3 READBACK,4 FRAME,5 TIMEOUT
+//
+//// ============================================================
+//// Critical section helper
+//// ============================================================
+//static inline void ENTER_CRITICAL(void) { INT_SYS_DisableIRQGlobal(); }
+//static inline void EXIT_CRITICAL(void)  { INT_SYS_EnableIRQGlobal();  }
+//
+//// ============================================================
+//// LED helpers (active-low)
+//// ============================================================
+//static void led_all_off(void)
+//{
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED0_INDEX, 1U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED1_INDEX, 1U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED2_INDEX, 1U);
+//}
+//
+//static void led_blue(void)
+//{
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED0_INDEX, 0U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED1_INDEX, 1U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED2_INDEX, 1U);
+//}
+//
+//static void led_green(void)
+//{
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED0_INDEX, 1U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED1_INDEX, 1U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED2_INDEX, 0U);
+//}
+//
+//static void led_red(void)
+//{
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED0_INDEX, 1U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED1_INDEX, 0U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED2_INDEX, 1U);
+//}
+//
+//static void led_yellow(void)
+//{
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED0_INDEX, 1U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED1_INDEX, 0U);
+//    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED2_INDEX, 0U);
+//}
+//
+//static void apply_led_by_range(uint8_t range)
+//{
+//    switch (range)
+//    {
+//        case RANGE_OPEN:  led_blue();    break;
+//        case RANGE_STUCK: led_yellow();  break;
+//        case RANGE_CLOSE: led_red();     break;
+//        default:          led_all_off(); break;
+//    }
+//}
+//
+//// ============================================================
+//// UART (A): RX chunk + RX ring, TX ring non-blocking
+//// ============================================================
+//// FIX(핵심): RX_CHUNK=1 (1바이트라도 즉시 처리되게)
+////            TX ring은 전송 완료 시점에만 r 포인터 이동
+//#define UART_RX_CHUNK_SIZE   (1u)
+//#define UART_RX_RING_SIZE    (256u)
+//#define UART_TX_RING_SIZE    (512u)
+//
+//static uint8_t g_uart_rx_chunk[UART_RX_CHUNK_SIZE];
+//static volatile bool g_uart_rx_armed = false;
+//
+//static volatile uint8_t  g_uart_rx_ring[UART_RX_RING_SIZE];
+//static volatile uint16_t g_uart_rx_w = 0u;
+//static volatile uint16_t g_uart_rx_r = 0u;
+//
+//static volatile uint8_t  g_uart_tx_ring[UART_TX_RING_SIZE];
+//static volatile uint16_t g_uart_tx_w = 0u;
+//static volatile uint16_t g_uart_tx_r = 0u;
+//
+//static volatile bool g_uart_tx_busy = false;
+//static volatile uint16_t g_uart_tx_inflight = 0u; // FIX: 전송 중 길이
+//
+//// ring helpers
+//static inline uint16_t rb_next_u16(uint16_t x, uint16_t mod)
+//{
+//    return (uint16_t)((x + 1u) % mod);
+//}
+//
+//// RX ring
+//static void uart_rx_ring_push(uint8_t b)
+//{
+//    uint16_t nw = rb_next_u16(g_uart_rx_w, UART_RX_RING_SIZE);
+//    if (nw == g_uart_rx_r) return; // overflow drop
+//    g_uart_rx_ring[g_uart_rx_w] = b;
+//    g_uart_rx_w = nw;
+//}
+//
+//static int uart_rx_ring_pop(uint8_t *out)
+//{
+//    if (g_uart_rx_r == g_uart_rx_w) return 0;
+//    *out = g_uart_rx_ring[g_uart_rx_r];
+//    g_uart_rx_r = rb_next_u16(g_uart_rx_r, UART_RX_RING_SIZE);
+//    return 1;
+//}
+//
+//// TX ring
+//static void uart_tx_ring_push(uint8_t b)
+//{
+//    uint16_t nw = rb_next_u16(g_uart_tx_w, UART_TX_RING_SIZE);
+//    if (nw == g_uart_tx_r) return; // overflow drop
+//    g_uart_tx_ring[g_uart_tx_w] = b;
+//    g_uart_tx_w = nw;
+//}
+//
+//static uint16_t uart_tx_ring_count(void)
+//{
+//    if (g_uart_tx_w >= g_uart_tx_r) return (uint16_t)(g_uart_tx_w - g_uart_tx_r);
+//    return (uint16_t)(UART_TX_RING_SIZE - (g_uart_tx_r - g_uart_tx_w));
+//}
+//
+//static uint16_t uart_tx_ring_contig_count(void)
+//{
+//    if (g_uart_tx_w >= g_uart_tx_r) return (uint16_t)(g_uart_tx_w - g_uart_tx_r);
+//    return (uint16_t)(UART_TX_RING_SIZE - g_uart_tx_r);
+//}
+//
+//// TX API (non-blocking enqueue)
+//static void uart_write_bytes_nb(const uint8_t *data, uint32_t len)
+//{
+//    for (uint32_t i = 0; i < len; i++)
+//        uart_tx_ring_push(data[i]);
+//}
+//
+//static void uart_write_char_nb(char c)
+//{
+//    uart_tx_ring_push((uint8_t)c);
+//}
+//
+//static void uart_write_string_nb(const char *s)
+//{
+//    while (*s) uart_write_char_nb(*s++);
+//}
+//
+//static void uart_log_event_nb(const char *msg)
+//{
+//    uart_write_string_nb("\r\n");
+//    uart_write_string_nb(msg);
+//    uart_write_string_nb("\r\n");
+//}
+//
+//// TX complete poll
+//static void uart_tx_poll_complete(void)
+//{
+//    if (!g_uart_tx_busy) return;
+//
+//    uint32_t rem = 0u;
+//    status_t st = LPUART_DRV_GetTransmitStatus(UART_INST, &rem);
+//
+//    if (st == STATUS_SUCCESS)
+//    {
+//        // FIX: 완료 시점에만 r 포인터 이동
+//        g_uart_tx_r = (uint16_t)((g_uart_tx_r + g_uart_tx_inflight) % UART_TX_RING_SIZE);
+//        g_uart_tx_inflight = 0u;
+//        g_uart_tx_busy = false;
+//    }
+//    else if (st != STATUS_BUSY)
+//    {
+//        // 에러/중단: in-flight 드롭 처리(복구 정책 단순화)
+//        g_uart_tx_r = (uint16_t)((g_uart_tx_r + g_uart_tx_inflight) % UART_TX_RING_SIZE);
+//        g_uart_tx_inflight = 0u;
+//        g_uart_tx_busy = false;
+//    }
+//}
+//
+//// TX drain step
+//static void uart_tx_drain_step(void)
+//{
+//    if (g_uart_tx_busy) return;
+//
+//    uint16_t cnt = uart_tx_ring_count();
+//    if (cnt == 0u) return;
+//
+//    // driver idle?
+//    uint32_t rem = 0u;
+//    if (LPUART_DRV_GetTransmitStatus(UART_INST, &rem) == STATUS_BUSY)
+//    {
+//        g_uart_tx_busy = true;
+//        return;
+//    }
+//
+//    // send contiguous chunk
+//    uint16_t contig = uart_tx_ring_contig_count();
+//    uint16_t sendLen = contig;
+//    if (sendLen > 64u) sendLen = 64u;
+//
+//    status_t st = LPUART_DRV_SendData(UART_INST, (uint8_t *)&g_uart_tx_ring[g_uart_tx_r], sendLen);
+//    if (st == STATUS_SUCCESS)
+//    {
+//        // FIX: r은 여기서 이동하지 않음
+//        g_uart_tx_inflight = sendLen;
+//        g_uart_tx_busy = true;
+//    }
+//}
+//
+//// RX chunk arm/collect
+//static void uart_rx_arm_chunk(void)
+//{
+//    if (g_uart_rx_armed) return;
+//
+//    status_t st = LPUART_DRV_ReceiveData(UART_INST, g_uart_rx_chunk, UART_RX_CHUNK_SIZE);
+//    if (st == STATUS_SUCCESS)
+//        g_uart_rx_armed = true;
+//}
+//
+//static void uart_rx_collect_and_rearm(void)
+//{
+//    if (!g_uart_rx_armed)
+//    {
+//        uart_rx_arm_chunk();
+//        return;
+//    }
+//
+//    uint32_t rem = 0u;
+//    status_t st = LPUART_DRV_GetReceiveStatus(UART_INST, &rem);
+//
+//    if (st == STATUS_SUCCESS)
+//    {
+//        for (uint32_t i = 0; i < UART_RX_CHUNK_SIZE; i++)
+//            uart_rx_ring_push(g_uart_rx_chunk[i]);
+//
+//        g_uart_rx_armed = false;
+//        uart_rx_arm_chunk();
+//    }
+//    else if (st == STATUS_BUSY)
+//    {
+//        // still receiving...
+//    }
+//    else
+//    {
+//        (void)LPUART_DRV_AbortReceivingData(UART_INST);
+//        g_uart_rx_armed = false;
+//        uart_rx_arm_chunk();
+//    }
+//}
+//
+//static void uart_io_init(void)
+//{
+//    (void)LPUART_DRV_Init(UART_INST, &lpUartState1, &lpuart_1_InitConfig0);
+//
+//    g_uart_rx_w = g_uart_rx_r = 0u;
+//    g_uart_tx_w = g_uart_tx_r = 0u;
+//
+//    g_uart_tx_busy = false;
+//    g_uart_tx_inflight = 0u;
+//
+//    g_uart_rx_armed = false;
+//    uart_rx_arm_chunk();
+//}
+//
+//// ============================================================
+//// CLI command parser (line-based, echo + backspace)
+//// ============================================================
+//#define CMD_BUF_SIZE (32u)
+//static char g_cmd_buf[CMD_BUF_SIZE];
+//static uint32_t g_cmd_len = 0u;
+//
+//static void cmd_reset(void)
+//{
+//    g_cmd_len = 0u;
+//    g_cmd_buf[0] = '\0';
+//}
+//
+//static void cmd_feed_char(char ch,
+//                          uint8_t *req_help,
+//                          uint8_t *req_status,
+//                          uint8_t *req_open,
+//                          uint8_t *req_close,
+//                          uint8_t *req_stuck)
+//{
+//    // backspace/delete
+//    if (ch == '\b' || ch == 0x7F)
+//    {
+//        if (g_cmd_len > 0u)
+//        {
+//            g_cmd_len--;
+//            g_cmd_buf[g_cmd_len] = '\0';
+//            uart_write_string_nb("\b \b"); // erase on terminal
+//        }
+//        return;
+//    }
+//
+//    // echo printable (NOTE: \r,\n은 여기서 에코하지 않음)
+//    if (ch >= 0x20 && ch <= 0x7E)
+//        uart_write_char_nb(ch);
+//
+//    // endline
+//    if (ch == '\r' || ch == '\n')
+//    {
+//        uart_write_string_nb("\r\n");
+//        g_cmd_buf[g_cmd_len] = '\0';
+//
+//        if (strcmp(g_cmd_buf, "help") == 0 || strcmp(g_cmd_buf, "h") == 0)
+//            *req_help = 1u;
+//        else if (strcmp(g_cmd_buf, "status") == 0 || strcmp(g_cmd_buf, "s") == 0)
+//            *req_status = 1u;
+//        else if (strcmp(g_cmd_buf, "open") == 0 || strcmp(g_cmd_buf, "o") == 0)
+//            *req_open = 1u;
+//        else if (strcmp(g_cmd_buf, "close") == 0 || strcmp(g_cmd_buf, "c") == 0)
+//            *req_close = 1u;
+//        else if (strcmp(g_cmd_buf, "stuck") == 0 || strcmp(g_cmd_buf, "st") == 0)
+//            *req_stuck = 1u;
+//        else if (g_cmd_buf[0] != '\0')
+//            uart_log_event_nb("[ERR] unknown cmd (help)");
+//
+//        cmd_reset();
+//        return;
+//    }
+//
+//    // normalize case
+//    if (ch >= 'A' && ch <= 'Z') ch = (char)(ch - 'A' + 'a');
+//
+//    if (g_cmd_len < (CMD_BUF_SIZE - 1u))
+//        g_cmd_buf[g_cmd_len++] = ch;
+//}
+//
+//// ============================================================
+//// UART status printing helpers
+//// ============================================================
+//static const char *range_str(uint8_t r)
+//{
+//    switch (r)
+//    {
+//        case RANGE_OPEN:  return "OPEN";
+//        case RANGE_STUCK: return "STUCK";
+//        case RANGE_CLOSE: return "CLOSE";
+//        default:          return "UNK";
+//    }
+//}
+//
+//static const char *control_str(uint8_t ctrl)
+//{
+//    switch (ctrl)
+//    {
+//        case CTRL_BTN: return "BTN";
+//        case CTRL_CMD: return "CMD";
+//        case CTRL_POT: return "POT";
+//        default:       return "UNK";
+//    }
+//}
+//
+//static const char *lin_err_str(uint8_t e)
+//{
+//    switch (e)
+//    {
+//        case 0: return "NONE";
+//        case 1: return "PID";
+//        case 2: return "CHECKSUM";
+//        case 3: return "READBACK";
+//        case 4: return "FRAME";
+//        case 5: return "TIMEOUT";
+//        default:return "UNK";
+//    }
+//}
+//
+//static void uart_status_line(uint8_t posPercent, uint8_t range, uint8_t err, uint8_t ctrl)
+//{
+//    char line[160];
+//    (void)snprintf(line, sizeof(line),
+//                   "\r\n[SLAVE] POS=%3u%% RANGE=%-5s CONTROL=%-3s ERR=0x%02X  cbEvent=%u  linErr=%s",
+//                   (unsigned)posPercent,
+//                   range_str(range),
+//                   control_str(ctrl),
+//                   (unsigned)err,
+//                   (unsigned)g_lastEvent,
+//                   lin_err_str(g_linErrCode));
+//    uart_write_string_nb(line);
+//}
+//
+//static void print_commands_master(void)
+//{
+//    uart_write_string_nb("\r\nCommands:\r\n");
+//    uart_write_string_nb("  open   (or o)  : send MOTOR OPEN\r\n");
+//    uart_write_string_nb("  stuck  (or st) : send MOTOR STUCK\r\n");
+//    uart_write_string_nb("  close  (or c)  : send MOTOR CLOSE\r\n");
+//    uart_write_string_nb("  status (or s)  : request slave status now\r\n");
+//    uart_write_string_nb("  help   (or h)  : show this\r\n");
+//    uart_write_string_nb("\r\n");
+//}
+//
+//// ============================================================
+//// LPTMR ISR
+//// ============================================================
+//void LPTMR_ISR(void)
+//{
+//    LIN_DRV_TimeoutService(INST_LIN2);
+//    g_tick500us++;
+//    timerOverflowInterruptCount++;
+//    LPTMR_DRV_ClearCompareFlag(INST_LPTMR_1);
+//}
+//
+//uint32_t lin1TimerGetTimeIntervalCallback0(uint32_t *ns)
+//{
+//    static uint32_t previousCountValue = 0UL;
+//    uint32_t counterValue;
+//
+//    counterValue = LPTMR_DRV_GetCounterValueByCount(INST_LPTMR_1);
+//
+//    // FIX: overflowCount 읽고 0 만드는 구간 크리티컬
+//    uint16_t ovf;
+//    ENTER_CRITICAL();
+//    ovf = timerOverflowInterruptCount;
+//    timerOverflowInterruptCount = 0U;
+//    EXIT_CRITICAL();
+//
+//    *ns = ((uint32_t)(counterValue + (uint32_t)ovf * TIMER_COMPARE_VAL - previousCountValue))
+//            * 1000U / TIMER_TICKS_1US;
+//
+//    previousCountValue = counterValue;
+//    return 0UL;
+//}
+//
+//// ============================================================
+//// Button ISR
+//// ============================================================
+//static volatile bool g_btnOpen = false;
+//static volatile bool g_btnClose = false;
+//
+//void BTNPORT_IRQHandler(void)
+//{
+//    uint32_t flags = PINS_DRV_GetPortIntFlag(BTN_PORT_NAME);
+//
+//    if (flags & (1UL << PORT_BTN_OPEN_INDEX))
+//    {
+//        g_btnOpen = true;
+//        PINS_DRV_ClearPinIntFlagCmd(BTN_PORT_NAME, PORT_BTN_OPEN_INDEX);
+//    }
+//
+//    if (flags & (1UL << PORT_BTN_CLOSE_INDEX))
+//    {
+//        g_btnClose = true;
+//        PINS_DRV_ClearPinIntFlagCmd(BTN_PORT_NAME, PORT_BTN_CLOSE_INDEX);
+//    }
+//}
+//
+//// ============================================================
+//// Frame Definition + Scheduler Table
+//// ============================================================
+//typedef enum { LIN_DIR_TX = 0, LIN_DIR_RX = 1 } lin_dir_t;
+//
+//typedef struct
+//{
+//    uint8_t    id;
+//    lin_dir_t  dir;
+//    uint8_t   *buf;
+//    uint8_t    len;
+//    uint16_t   timeoutCnt;
+//} lin_frame_def_t;
+//
+//enum
+//{
+//    FRAME_IDX_CMD = 0,
+//    FRAME_IDX_STATUS,
+//    FRAME_IDX_COUNT
+//};
+//
+//static lin_frame_def_t g_frames[FRAME_IDX_COUNT] =
+//{
+//    { .id = FRAME_MOTOR_CMD,    .dir = LIN_DIR_TX, .buf = g_txCmd,    .len = DATA_SIZE, .timeoutCnt = TIMEOUT_LIN_CNT },
+//    { .id = FRAME_SLAVE_STATUS, .dir = LIN_DIR_RX, .buf = g_rxStatus, .len = DATA_SIZE, .timeoutCnt = TIMEOUT_LIN_CNT }
+//};
+//
+//typedef struct
+//{
+//    uint8_t   frameIndex;
+//    uint32_t  periodTicks;   // 0이면 비주기
+//    uint32_t  nextDueTick;
+//    uint8_t   priority;      // 작을수록 높음
+//    bool      enabled;
+//} lin_sched_entry_t;
+//
+//// 200ms = 200000us / 500us = 400 ticks
+//#define TICKS_200MS (400U)
+//
+//enum
+//{
+//    SCHED_STATUS_POLL = 0,
+//    SCHED_COUNT
+//};
+//
+//static lin_sched_entry_t g_sched[SCHED_COUNT] =
+//{
+//    { .frameIndex = FRAME_IDX_STATUS, .periodTicks = TICKS_200MS, .nextDueTick = 0U, .priority = 10U, .enabled = true }
+//};
+//
+//static void scheduler_init(uint32_t nowTick)
+//{
+//    for (uint32_t i = 0; i < SCHED_COUNT; i++)
+//    {
+//        if (!g_sched[i].enabled) continue;
+//        g_sched[i].nextDueTick = nowTick + g_sched[i].periodTicks;
+//    }
+//}
+//
+//static int32_t scheduler_pick_due(uint32_t nowTick)
+//{
+//    int32_t best = -1;
+//    uint8_t bestPrio = 0xFFU;
+//
+//    for (uint32_t i = 0; i < SCHED_COUNT; i++)
+//    {
+//        if (!g_sched[i].enabled) continue;
+//        if (g_sched[i].periodTicks == 0U) continue;
+//
+//        if ((int32_t)(nowTick - g_sched[i].nextDueTick) >= 0)
+//        {
+//            if (g_sched[i].priority < bestPrio)
+//            {
+//                bestPrio = g_sched[i].priority;
+//                best = (int32_t)i;
+//            }
+//        }
+//    }
+//    return best;
+//}
+//
+//static void scheduler_on_fired(uint32_t schedIndex, uint32_t nowTick)
+//{
+//    if (g_sched[schedIndex].periodTicks != 0U)
+//        g_sched[schedIndex].nextDueTick = nowTick + g_sched[schedIndex].periodTicks;
+//}
+//
+//// ============================================================
+//// Request object (transaction)
+//// ============================================================
+//typedef enum
+//{
+//    REQ_SRC_BTN = 0,
+//    REQ_SRC_UART,
+//    REQ_SRC_PERIODIC
+//} req_source_t;
+//
+//typedef enum
+//{
+//    REQ_TYPE_NONE = 0,
+//    REQ_TYPE_CMD,
+//    REQ_TYPE_STATUS
+//} req_type_t;
+//
+//typedef struct
+//{
+//    req_type_t   type;
+//    req_source_t src;
+//    uint8_t      frameIndex;
+//
+//    uint8_t      maxRetry;
+//    uint8_t      retryCount;
+//    uint32_t     deadlineTick; // 0이면 app deadline 미사용
+//} lin_req_t;
+//
+//// ============================================================
+//// Input coalescing (last-wins)
+//// ============================================================
+//static volatile bool         g_cmdPending = false;
+//static volatile uint8_t      g_cmdTarget  = MOTOR_TARGET_LEFT;
+//static volatile req_source_t g_cmdSrc     = REQ_SRC_UART;
+//
+//static volatile bool g_userStatusPending = false;
+//
+//// ============================================================
+//// LIN Engine FSM (single in-flight request)
+//// ============================================================
+//typedef enum
+//{
+//    ENG_IDLE = 0,
+//    ENG_WAIT_PID,
+//    ENG_WAIT_TX,
+//    ENG_WAIT_RX
+//} lin_eng_state_t;
+//
+//static volatile lin_eng_state_t g_engState = ENG_IDLE;
+//
+//static volatile uint8_t   g_activeFrameIndex = 0U;
+//static volatile lin_req_t g_activeReq;
+//
+//// callback flags
+//#define LIN_F_PID_OK   (1UL << 0)
+//#define LIN_F_TX_DONE  (1UL << 1)
+//#define LIN_F_RX_DONE  (1UL << 2)
+//#define LIN_F_ERROR    (1UL << 3)
+//#define LIN_F_TIMEOUT  (1UL << 4)
+//static volatile uint32_t g_linFlags = 0U;
+//
+//// ============================================================
+//// LIN Callback: flags only
+//// ============================================================
+//lin_callback_t CallbackHandler(uint32_t instance, lin_state_t *linState)
+//{
+//    lin_callback_t ret = linState->Callback;
+//    (void)instance;
+//
+//    if (linState->timeoutCounterFlag)
+//    {
+//        linState->timeoutCounterFlag = false;
+//        g_linFlags |= (LIN_F_TIMEOUT | LIN_F_ERROR);
+//        g_linErrCode = 5;
+//        return ret;
+//    }
+//
+//    g_lastEvent = (uint8_t)linState->currentEventId;
+//
+//    switch (linState->currentEventId)
+//    {
+//        case LIN_PID_OK:        g_linFlags |= LIN_F_PID_OK;  break;
+//        case LIN_TX_COMPLETED:  g_linFlags |= LIN_F_TX_DONE; break;
+//        case LIN_RX_COMPLETED:  g_linFlags |= LIN_F_RX_DONE; break;
+//
+//        case LIN_PID_ERROR:        g_linFlags |= LIN_F_ERROR; g_linErrCode = 1; break;
+//        case LIN_CHECKSUM_ERROR:   g_linFlags |= LIN_F_ERROR; g_linErrCode = 2; break;
+//        case LIN_READBACK_ERROR:   g_linFlags |= LIN_F_ERROR; g_linErrCode = 3; break;
+//        case LIN_FRAME_ERROR:      g_linFlags |= LIN_F_ERROR; g_linErrCode = 4; break;
+//
+//        default: break;
+//    }
+//
+//    return ret;
+//}
+//
+//static void engine_reset_to_idle(void)
+//{
+//    (void)LIN_DRV_GotoIdleState(INST_LIN2);
+//    g_engState = ENG_IDLE;
+//
+//    ENTER_CRITICAL();
+//    g_linFlags = 0U;
+//    EXIT_CRITICAL();
+//}
+//
+//static bool engine_start_request(const lin_req_t *req)
+//{
+//    if (g_engState != ENG_IDLE) return false;
+//
+//    // reset stale debug info for this transaction
+//    g_linErrCode = 0;
+//    g_lastEvent  = 0;
+//
+//    g_activeReq = *req;
+//    g_activeFrameIndex = req->frameIndex;
+//
+//    (void)LIN_DRV_MasterSendHeader(INST_LIN2, g_frames[g_activeFrameIndex].id);
+//    g_engState = ENG_WAIT_PID;
+//    return true;
+//}
+//
+//// 완료 후처리: UART/LED 반영 + 정책(CMD 후 STATUS 1회)
+//static void on_request_done(const lin_req_t *req, bool ok)
+//{
+//    if (!ok)
+//    {
+//        uart_log_event_nb("[LIN] request FAILED");
+//        // 실패 표시를 green으로 쓰면 헷갈릴 수 있어 yellow 추천
+//        led_yellow();
+//        return;
+//    }
+//
+//    if (req->type == REQ_TYPE_STATUS)
+//    {
+//        uint8_t pos   = g_rxStatus[0];
+//        uint8_t range = g_rxStatus[1];
+//        uint8_t err   = g_rxStatus[2];
+//        uint8_t ctrl  = g_rxStatus[3];
+//
+//        uart_status_line(pos, range, err, ctrl);
+//        apply_led_by_range(range);
+//        return;
+//    }
+//
+//    if (req->type == REQ_TYPE_CMD)
+//    {
+//        uart_log_event_nb("[LIN] CMD OK -> sync STATUS once");
+//        g_userStatusPending = true;
+//        return;
+//    }
+//}
+//
+//// 엔진 step: callback flag 스냅샷 후 FSM 진행
+//static void engine_step(void)
+//{
+//    // flags snapshot
+//    uint32_t flags;
+//    ENTER_CRITICAL();
+//    flags = g_linFlags;
+//    g_linFlags = 0U;
+//    EXIT_CRITICAL();
+//
+//    // app-level deadline (optional)
+//    if (g_engState != ENG_IDLE && g_activeReq.deadlineTick != 0U)
+//    {
+//        uint32_t now = (uint32_t)g_tick500us;
+//        if ((int32_t)(now - g_activeReq.deadlineTick) >= 0)
+//        {
+//            uart_log_event_nb("[LIN] DEADLINE EXPIRED");
+//            on_request_done((const lin_req_t *)&g_activeReq, false);
+//            engine_reset_to_idle();
+//            return;
+//        }
+//    }
+//
+//    // error handling + retry
+//    if (flags & LIN_F_ERROR)
+//    {
+//        char msg[120];
+//        (void)snprintf(msg, sizeof(msg),
+//                       "[LIN] ERROR: frame=%u err=%s cbEvent=%u retry=%u/%u",
+//                       (unsigned)g_frames[g_activeFrameIndex].id,
+//                       lin_err_str(g_linErrCode),
+//                       (unsigned)g_lastEvent,
+//                       (unsigned)g_activeReq.retryCount,
+//                       (unsigned)g_activeReq.maxRetry);
+//        uart_log_event_nb(msg);
+//
+//        if (g_activeReq.retryCount < g_activeReq.maxRetry)
+//        {
+//            g_activeReq.retryCount++;
+//
+//            engine_reset_to_idle();
+//            (void)engine_start_request((const lin_req_t *)&g_activeReq);
+//            return;
+//        }
+//
+//        on_request_done((const lin_req_t *)&g_activeReq, false);
+//        engine_reset_to_idle();
+//        return;
+//    }
+//
+//    // WAIT_PID -> send/recv
+//    if (g_engState == ENG_WAIT_PID)
+//    {
+//        if (flags & LIN_F_PID_OK)
+//        {
+//            LIN_DRV_SetTimeoutCounter(INST_LIN2, g_frames[g_activeFrameIndex].timeoutCnt);
+//
+//            if (g_frames[g_activeFrameIndex].dir == LIN_DIR_TX)
+//            {
+//                (void)LIN_DRV_SendFrameData(INST_LIN2,
+//                                            g_frames[g_activeFrameIndex].buf,
+//                                            g_frames[g_activeFrameIndex].len);
+//                g_engState = ENG_WAIT_TX;
+//            }
+//            else
+//            {
+//                (void)LIN_DRV_ReceiveFrameData(INST_LIN2,
+//                                               g_frames[g_activeFrameIndex].buf,
+//                                               g_frames[g_activeFrameIndex].len);
+//                g_engState = ENG_WAIT_RX;
+//            }
+//        }
+//        return;
+//    }
+//
+//    // WAIT_TX -> done
+//    if (g_engState == ENG_WAIT_TX)
+//    {
+//        if (flags & LIN_F_TX_DONE)
+//        {
+//            on_request_done((const lin_req_t *)&g_activeReq, true);
+//            engine_reset_to_idle();
+//        }
+//        return;
+//    }
+//
+//    // WAIT_RX -> done
+//    if (g_engState == ENG_WAIT_RX)
+//    {
+//        if (flags & LIN_F_RX_DONE)
+//        {
+//            on_request_done((const lin_req_t *)&g_activeReq, true);
+//            engine_reset_to_idle();
+//        }
+//        return;
+//    }
+//}
+//
+//// ============================================================
+//// Dispatcher: choose next request
+//// priority: CMD(event) > STATUS(user) > STATUS(periodic)
+//// ============================================================
+//static bool dispatcher_make_next_request(lin_req_t *outReq, uint32_t nowTick, int32_t *outSchedIndex)
+//{
+//    *outSchedIndex = -1;
+//    memset(outReq, 0, sizeof(*outReq));
+//
+//    // 1) CMD pending
+//    if (g_cmdPending)
+//    {
+//        uint8_t tgt = g_cmdTarget;
+//        req_source_t src = g_cmdSrc;
+//        g_cmdPending = false;
+//
+//        memset(g_txCmd, 0, sizeof(g_txCmd));
+//        g_txCmd[0] = tgt;
+//
+//        outReq->type = REQ_TYPE_CMD;
+//        outReq->src  = src;
+//        outReq->frameIndex = FRAME_IDX_CMD;
+//
+//        outReq->maxRetry = 1U;
+//        outReq->retryCount = 0U;
+//        outReq->deadlineTick = nowTick + 300U; // 150ms
+//        return true;
+//    }
+//
+//    // 2) user status pending
+//    if (g_userStatusPending)
+//    {
+//        g_userStatusPending = false;
+//
+//        outReq->type = REQ_TYPE_STATUS;
+//        outReq->src  = REQ_SRC_UART;
+//        outReq->frameIndex = FRAME_IDX_STATUS;
+//
+//        outReq->maxRetry = 2U;
+//        outReq->retryCount = 0U;
+//        outReq->deadlineTick = nowTick + 400U; // 200ms
+//        return true;
+//    }
+//
+//    // 3) periodic schedule
+//    int32_t si = scheduler_pick_due(nowTick);
+//    if (si >= 0)
+//    {
+//        *outSchedIndex = si;
+//
+//        outReq->type = REQ_TYPE_STATUS;
+//        outReq->src  = REQ_SRC_PERIODIC;
+//        outReq->frameIndex = g_sched[si].frameIndex;
+//
+//        outReq->maxRetry = 1U;
+//        outReq->retryCount = 0U;
+//        outReq->deadlineTick = nowTick + 400U;
+//        return true;
+//    }
+//
+//    return false;
+//}
+//
+//// ============================================================
+//// Input hooks
+//// ============================================================
+//static void request_motor_target(req_source_t src, uint8_t target)
+//{
+//    if (target > MOTOR_TARGET_STUCK) target = MOTOR_TARGET_STUCK;
+//
+//    g_cmdSrc = src;
+//    g_cmdTarget = target;
+//    g_cmdPending = true; // last-wins
+//}
+//
+//static void request_status_now(req_source_t src)
+//{
+//    (void)src;
+//    g_userStatusPending = true; // coalesce
+//}
+//
+//// ============================================================
+//// Master task (integrated)
+//// ============================================================
+//static void lin_master_task(void)
+//{
+//    // UART init (A)
+//    uart_io_init();
+//
+//    uart_write_string_nb("\r\n=== LIN MASTER (SCHED + UART A) START ===\r\n");
+//    uart_write_string_nb("BTN12: OPEN, BTN13: CLOSE\r\n");
+//    uart_write_string_nb("UART cmd: open/close/stuck/status/help\r\n");
+//    print_commands_master();
+//
+//    cmd_reset();
+//    uart_tx_drain_step();
+//
+//    // LIN init
+//    (void)LIN_DRV_Init(INST_LIN2, &lin2_InitConfig0, &lin2_State);
+//    (void)LIN_DRV_InstallCallback(INST_LIN2, (lin_callback_t)CallbackHandler);
+//
+//    led_all_off();
+//
+//    // scheduler init
+//    scheduler_init((uint32_t)g_tick500us);
+//    engine_reset_to_idle();
+//
+//    // OPTIONAL: 버튼 디바운스(20ms)
+//    uint32_t lastBtnOpenTick  = 0U;
+//    uint32_t lastBtnCloseTick = 0U;
+//    const uint32_t debounceTicks = 40U; // 40 * 0.5ms = 20ms
+//
+//    for (;;)
+//    {
+//        // 0) UART progress (RX collect + TX complete/drain)
+//        uart_rx_collect_and_rearm();
+//        uart_tx_poll_complete();
+//        uart_tx_drain_step();
+//
+//        // 1) engine step (consume LIN flags)
+//        engine_step();
+//
+//        // 2) CLI parse
+//        uint8_t req_help = 0u, req_status = 0u, req_open = 0u, req_close = 0u, req_stuck = 0u;
+//        uint8_t b;
+//
+//        while (uart_rx_ring_pop(&b))
+//        {
+//            cmd_feed_char((char)b, &req_help, &req_status, &req_open, &req_close, &req_stuck);
+//        }
+//
+//        if (req_help) print_commands_master();
+//
+//        if (req_open)
+//        {
+//            uart_log_event_nb("[CMD] open");
+//            request_motor_target(REQ_SRC_UART, MOTOR_TARGET_LEFT);
+//        }
+//        if (req_close)
+//        {
+//            uart_log_event_nb("[CMD] close");
+//            request_motor_target(REQ_SRC_UART, MOTOR_TARGET_RIGHT);
+//        }
+//        if (req_stuck)
+//        {
+//            uart_log_event_nb("[CMD] stuck");
+//            request_motor_target(REQ_SRC_UART, MOTOR_TARGET_STUCK);
+//        }
+//        if (req_status)
+//        {
+//            uart_log_event_nb("[CMD] status");
+//            request_status_now(REQ_SRC_UART);
+//        }
+//
+//        // 3) Buttons -> requests (with debounce)
+//        if (g_btnOpen)
+//        {
+//            g_btnOpen = false;
+//            uint32_t now = (uint32_t)g_tick500us;
+//            if ((uint32_t)(now - lastBtnOpenTick) >= debounceTicks)
+//            {
+//                lastBtnOpenTick = now;
+//                uart_log_event_nb("[EVENT] BTN12 -> OPEN");
+//                request_motor_target(REQ_SRC_BTN, MOTOR_TARGET_LEFT);
+//            }
+//        }
+//
+//        if (g_btnClose)
+//        {
+//            g_btnClose = false;
+//            uint32_t now = (uint32_t)g_tick500us;
+//            if ((uint32_t)(now - lastBtnCloseTick) >= debounceTicks)
+//            {
+//                lastBtnCloseTick = now;
+//                uart_log_event_nb("[EVENT] BTN13 -> CLOSE");
+//                request_motor_target(REQ_SRC_BTN, MOTOR_TARGET_RIGHT);
+//            }
+//        }
+//
+//        // 4) If engine idle, dispatch next request
+//        if (g_engState == ENG_IDLE)
+//        {
+//            lin_req_t req;
+//            int32_t schedIndex;
+//            uint32_t now = (uint32_t)g_tick500us;
+//
+//            if (dispatcher_make_next_request(&req, now, &schedIndex))
+//            {
+//                if (engine_start_request(&req))
+//                {
+//                    if (schedIndex >= 0)
+//                        scheduler_on_fired((uint32_t)schedIndex, now);
+//                }
+//            }
+//        }
+//
+//        if (exit_code != 0) break;
+//    }
+//}
+//
+//// ============================================================
+//// main
+//// ============================================================
+//int main(void)
+//{
+//    CLOCK_SYS_Init(g_clockManConfigsArr, CLOCK_MANAGER_CONFIG_CNT,
+//                   g_clockManCallbacksArr, CLOCK_MANAGER_CALLBACK_CNT);
+//    CLOCK_SYS_UpdateConfiguration(0U, CLOCK_MANAGER_POLICY_AGREEMENT);
+//
+//    PINS_DRV_Init(NUM_OF_CONFIGURED_PINS0, g_pin_mux_InitConfigArr0);
+//
+//#if USE_LIN_XCVR
+//    PINS_DRV_SetPinsDirection(LIN_XCVR_ENABLE_GPIO_PORT, LIN_XCVR_ENABLE_MASK);
+//    PINS_DRV_SetPins(LIN_XCVR_ENABLE_GPIO_PORT, LIN_XCVR_ENABLE_MASK);
+//#endif
+//
+//    // Button IRQ (PORTC)
+//    INT_SYS_InstallHandler(BTN_PORT_IRQn, BTNPORT_IRQHandler, (isr_t *)NULL);
+//    INT_SYS_EnableIRQ(BTN_PORT_IRQn);
+//
+//    // LPTMR
+//    LPTMR_DRV_Init(INST_LPTMR_1, &lptmr_1_config0, false);
+//    INT_SYS_InstallHandler(LPTMR0_IRQn, LPTMR_ISR, (isr_t *)NULL);
+//    INT_SYS_EnableIRQ(LPTMR0_IRQn);
+//    LPTMR_DRV_StartCounter(INST_LPTMR_1);
+//
+//    lin_master_task();
+//
+//    for (;;)
+//    {
+//        if (exit_code != 0) break;
+//    }
+//    return exit_code;
+//}
+
+#include "sdk_project_config.h"
+
+#include <stdint.h>
+#include <stdbool.h>
+#include <string.h>
+#include <stdio.h>
+
+volatile int exit_code = 0;
+
+// ============================================================
+// EVB LED (active-low)
+// ============================================================
+#define PORT_LED0_INDEX           (0u)    // PTD0 (Blue)  active-low
+#define PORT_LED1_INDEX           (15u)   // PTD15 (Red)   active-low
+#define PORT_LED2_INDEX           (16u)   // PTD16 (Green) active-low
+#define LED_GPIO_PORT             (PTD)
+
+// ============================================================
+// Buttons: PTC12 / PTC13
+//   BTN12: OPEN
+//   BTN13: CLOSE
+// ============================================================
+#define PORT_BTN_OPEN_INDEX       (12u)   // PTC12
+#define PORT_BTN_CLOSE_INDEX      (13u)   // PTC13
+#define BTN_PORT_NAME             (PORTC)
+#define BTN_PORT_IRQn             (PORTC_IRQn)
+
+// ============================================================
+// LIN XCVR enable
+// ============================================================
+#define USE_LIN_XCVR              (1U)
+#define LIN_XCVR_ENABLE_PIN       (9UL)
+#define LIN_XCVR_ENABLE_MASK      (0x1u << LIN_XCVR_ENABLE_PIN)
+#define LIN_XCVR_ENABLE_GPIO_PORT (PTE)
+
+// ============================================================
+// LPTMR time base
+// ============================================================
+#define TIMER_COMPARE_VAL             (uint16_t)(2000U)
+#define TIMER_TICKS_1US               (uint16_t)(4U)
+#define LPTMR_TICK_US                 (500U)      // 0.5ms/tick
+
+// ============================================================
+// LIN
+// ============================================================
+#define DATA_SIZE                     (8U)
+#define FRAME_MOTOR_CMD               (1U)   // Master -> Slave (TX)
+#define FRAME_SLAVE_STATUS            (2U)   // Slave -> Master (RX)
+#define TIMEOUT_LIN_CNT               (500U) // LIN timeout counter
+
+// CMD payload
+#define MOTOR_TARGET_LEFT             (0U) // OPEN
+#define MOTOR_TARGET_RIGHT            (1U) // CLOSE
+#define MOTOR_TARGET_STUCK            (2U)
+
+// STATUS payload
+#define RANGE_OPEN                    (0U)
+#define RANGE_STUCK                   (1U)
+#define RANGE_CLOSE                   (2U)
+
+// STATUS control (slave reports)
+#define CTRL_BTN                      (0U)
+#define CTRL_CMD                      (1U)
+#define CTRL_POT                      (2U)
+
+// ============================================================
+// UART
+// ============================================================
+#define UART_INST                     (INST_LPUART_1)
+
+// ============================================================
+// LPTMR counters
+// ============================================================
+// ISR/Callback 공유 => volatile + (callback에서) 크리티컬로 읽고 0 처리
+static volatile uint32_t timerOverflowInterruptCount = 0U;
+static volatile uint32_t g_tick500us = 0U;
+
+// ============================================================
+// Buffers
+// ============================================================
+static uint8_t g_txCmd[DATA_SIZE]    = {0};
+static uint8_t g_rxStatus[DATA_SIZE] = {0};
+
+// ============================================================
+// debug (LIN)
+// ============================================================
+static volatile uint8_t g_lastEvent  = 0U;
+static volatile uint8_t g_linErrCode = 0U; // 0 none, 1 PID,2 CHK,3 READBACK,4 FRAME,5 TIMEOUT
+
+// ============================================================
+// Critical section helper
+// ============================================================
+static inline void ENTER_CRITICAL(void) { INT_SYS_DisableIRQGlobal(); }
+static inline void EXIT_CRITICAL(void)  { INT_SYS_EnableIRQGlobal();  }
+
+// ============================================================
+// LED helpers (active-low)
+// ============================================================
+static void led_all_off(void)
+{
+    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED0_INDEX, 1U);
+    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED1_INDEX, 1U);
+    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED2_INDEX, 1U);
+}
+
+static void led_blue(void)
+{
+    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED0_INDEX, 0U);
+    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED1_INDEX, 1U);
+    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED2_INDEX, 1U);
+}
+
+static void led_green(void)
+{
+    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED0_INDEX, 1U);
+    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED1_INDEX, 1U);
+    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED2_INDEX, 0U);
+}
+
+static void led_red(void)
+{
+    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED0_INDEX, 1U);
+    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED1_INDEX, 0U);
+    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED2_INDEX, 1U);
+}
+
+static void led_yellow(void)
+{
+    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED0_INDEX, 1U);
+    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED1_INDEX, 0U);
+    PINS_DRV_WritePin(LED_GPIO_PORT, PORT_LED2_INDEX, 0U);
+}
+
+static void apply_led_by_range(uint8_t range)
+{
+    switch (range)
+    {
+        case RANGE_OPEN:  led_blue();    break;
+        case RANGE_STUCK: led_yellow();  break;
+        case RANGE_CLOSE: led_red();     break;
+        default:          led_all_off(); break;
+    }
+}
+
+// ============================================================
+// UART: RX chunk + RX ring, TX ring non-blocking
+// ============================================================
+#define UART_RX_CHUNK_SIZE   (1u)     // 핵심: 1바이트 즉시 처리
+#define UART_RX_RING_SIZE    (256u)
+#define UART_TX_RING_SIZE    (512u)
+
+static uint8_t g_uart_rx_chunk[UART_RX_CHUNK_SIZE];
+static volatile bool g_uart_rx_armed = false;
+
+static volatile uint8_t  g_uart_rx_ring[UART_RX_RING_SIZE];
+static volatile uint16_t g_uart_rx_w = 0u;
+static volatile uint16_t g_uart_rx_r = 0u;
+
+static volatile uint8_t  g_uart_tx_ring[UART_TX_RING_SIZE];
+static volatile uint16_t g_uart_tx_w = 0u;
+static volatile uint16_t g_uart_tx_r = 0u;
+
+static volatile bool g_uart_tx_busy = false;
+static volatile uint16_t g_uart_tx_inflight = 0u; // 전송 중 길이
+
+static inline uint16_t rb_next_u16(uint16_t x, uint16_t mod)
+{
+    return (uint16_t)((x + 1u) % mod);
+}
+
+// RX ring
+static void uart_rx_ring_push(uint8_t b)
+{
+    uint16_t nw = rb_next_u16(g_uart_rx_w, UART_RX_RING_SIZE);
+    if (nw == g_uart_rx_r) return; // overflow drop
+    g_uart_rx_ring[g_uart_rx_w] = b;
+    g_uart_rx_w = nw;
+}
+
+static int uart_rx_ring_pop(uint8_t *out)
+{
+    if (g_uart_rx_r == g_uart_rx_w) return 0;
+    *out = g_uart_rx_ring[g_uart_rx_r];
+    g_uart_rx_r = rb_next_u16(g_uart_rx_r, UART_RX_RING_SIZE);
+    return 1;
+}
+
+// TX ring
+static void uart_tx_ring_push(uint8_t b)
+{
+    uint16_t nw = rb_next_u16(g_uart_tx_w, UART_TX_RING_SIZE);
+    if (nw == g_uart_tx_r) return; // overflow drop
+    g_uart_tx_ring[g_uart_tx_w] = b;
+    g_uart_tx_w = nw;
+}
+
+static uint16_t uart_tx_ring_count(void)
+{
+    if (g_uart_tx_w >= g_uart_tx_r) return (uint16_t)(g_uart_tx_w - g_uart_tx_r);
+    return (uint16_t)(UART_TX_RING_SIZE - (g_uart_tx_r - g_uart_tx_w));
+}
+
+static uint16_t uart_tx_ring_contig_count(void)
+{
+    if (g_uart_tx_w >= g_uart_tx_r) return (uint16_t)(g_uart_tx_w - g_uart_tx_r);
+    return (uint16_t)(UART_TX_RING_SIZE - g_uart_tx_r);
+}
+
+// TX API (non-blocking enqueue)
+static void uart_write_char_nb(char c)
+{
+    uart_tx_ring_push((uint8_t)c);
+}
+
+static void uart_write_string_nb(const char *s)
+{
+    while (*s) uart_write_char_nb(*s++);
+}
+
+static void uart_tx_poll_complete(void)
+{
+    if (!g_uart_tx_busy) return;
+
+    uint32_t rem = 0u;
+    status_t st = LPUART_DRV_GetTransmitStatus(UART_INST, &rem);
+
+    if (st == STATUS_SUCCESS)
+    {
+        // 완료 시점에만 r 이동
+        g_uart_tx_r = (uint16_t)((g_uart_tx_r + g_uart_tx_inflight) % UART_TX_RING_SIZE);
+        g_uart_tx_inflight = 0u;
+        g_uart_tx_busy = false;
+    }
+    else if (st != STATUS_BUSY)
+    {
+        // 에러/중단: 단순 드롭
+        g_uart_tx_r = (uint16_t)((g_uart_tx_r + g_uart_tx_inflight) % UART_TX_RING_SIZE);
+        g_uart_tx_inflight = 0u;
+        g_uart_tx_busy = false;
+    }
+}
+
+static void uart_tx_drain_step(void)
+{
+    if (g_uart_tx_busy) return;
+
+    uint16_t cnt = uart_tx_ring_count();
+    if (cnt == 0u) return;
+
+    uint32_t rem = 0u;
+    if (LPUART_DRV_GetTransmitStatus(UART_INST, &rem) == STATUS_BUSY)
+    {
+        g_uart_tx_busy = true;
+        return;
+    }
+
+    uint16_t contig = uart_tx_ring_contig_count();
+    uint16_t sendLen = contig;
+    if (sendLen > 64u) sendLen = 64u;
+
+    status_t st = LPUART_DRV_SendData(UART_INST, (uint8_t *)&g_uart_tx_ring[g_uart_tx_r], sendLen);
+    if (st == STATUS_SUCCESS)
+    {
+        g_uart_tx_inflight = sendLen;
+        g_uart_tx_busy = true;
+    }
+}
+
+static void uart_rx_arm_chunk(void)
+{
+    if (g_uart_rx_armed) return;
+
+    status_t st = LPUART_DRV_ReceiveData(UART_INST, g_uart_rx_chunk, UART_RX_CHUNK_SIZE);
+    if (st == STATUS_SUCCESS)
+        g_uart_rx_armed = true;
+}
+
+static void uart_rx_collect_and_rearm(void)
+{
+    if (!g_uart_rx_armed)
+    {
+        uart_rx_arm_chunk();
+        return;
+    }
+
+    uint32_t rem = 0u;
+    status_t st = LPUART_DRV_GetReceiveStatus(UART_INST, &rem);
+
+    if (st == STATUS_SUCCESS)
+    {
+        for (uint32_t i = 0; i < UART_RX_CHUNK_SIZE; i++)
+            uart_rx_ring_push(g_uart_rx_chunk[i]);
+
+        g_uart_rx_armed = false;
+        uart_rx_arm_chunk();
+    }
+    else if (st == STATUS_BUSY)
+    {
+        // still receiving...
+    }
+    else
+    {
+        (void)LPUART_DRV_AbortReceivingData(UART_INST);
+        g_uart_rx_armed = false;
+        uart_rx_arm_chunk();
+    }
+}
+
+static void uart_io_init(void)
+{
+    (void)LPUART_DRV_Init(UART_INST, &lpUartState1, &lpuart_1_InitConfig0);
+
+    g_uart_rx_w = g_uart_rx_r = 0u;
+    g_uart_tx_w = g_uart_tx_r = 0u;
+
+    g_uart_tx_busy = false;
+    g_uart_tx_inflight = 0u;
+
+    g_uart_rx_armed = false;
+    uart_rx_arm_chunk();
+}
+
+// ============================================================
+// CLI command parser (line-based, echo + backspace)
+// ============================================================
+#define CMD_BUF_SIZE (32u)
+static char g_cmd_buf[CMD_BUF_SIZE];
+static uint32_t g_cmd_len = 0u;
+
+static void cmd_reset(void)
+{
+    g_cmd_len = 0u;
+    g_cmd_buf[0] = '\0';
+}
+
+// ============================================================
+// Text helpers
+// ============================================================
+static const char *range_str(uint8_t r)
+{
+    switch (r)
+    {
+        case RANGE_OPEN:  return "OPEN";
+        case RANGE_STUCK: return "STUCK";
+        case RANGE_CLOSE: return "CLOSE";
+        default:          return "UNK";
+    }
+}
+
+static const char *control_str(uint8_t ctrl)
+{
+    switch (ctrl)
+    {
+        case CTRL_BTN: return "BTN";
+        case CTRL_CMD: return "CMD";
+        case CTRL_POT: return "POT";
+        default:       return "UNK";
+    }
+}
+
+static const char *lin_err_str(uint8_t e)
+{
+    switch (e)
+    {
+        case 0: return "NONE";
+        case 1: return "PID";
+        case 2: return "CHECKSUM";
+        case 3: return "READBACK";
+        case 4: return "FRAME";
+        case 5: return "TIMEOUT";
+        default:return "UNK";
+    }
+}
+
+// ============================================================
+// UI (ANSI): fixed screen, no scrolling logs
+// ============================================================
+#define ANSI_ESC "\x1b"
+
+static void term_clear_screen(void) { uart_write_string_nb(ANSI_ESC "[2J"); }
+static void term_cursor_home(void)  { uart_write_string_nb(ANSI_ESC "[H"); }
+static void term_clear_line(void)   { uart_write_string_nb(ANSI_ESC "[2K"); }
+static void term_hide_cursor(void)  { uart_write_string_nb(ANSI_ESC "[?25l"); }
+static void term_show_cursor(void)  { uart_write_string_nb(ANSI_ESC "[?25h"); }
+
+static void term_cursor_pos(uint8_t r, uint8_t c)
+{
+    char b[24];
+    (void)snprintf(b, sizeof(b), ANSI_ESC "[%u;%uH", (unsigned)r, (unsigned)c);
+    uart_write_string_nb(b);
+}
+
+// --- UI row layout (1-indexed) ---
+#define UI_ROW_TITLE_INPUT   (1u)
+#define UI_ROW_INPUT_LINE    (2u)
+#define UI_ROW_BLANK_1       (3u)
+
+#define UI_ROW_TITLE_LIN     (4u)
+#define UI_ROW_LIN_1         (5u)
+#define UI_ROW_LIN_2         (6u)
+#define UI_ROW_LIN_3         (7u)
+#define UI_ROW_BLANK_2       (8u)
+
+#define UI_ROW_TITLE_SLAVE   (9u)
+#define UI_ROW_SLAVE_1       (10u)
+#define UI_ROW_SLAVE_2       (11u)
+#define UI_ROW_SLAVE_3       (12u)
+
+#define UI_INPUT_COL_PROMPT  (1u)
+#define UI_INPUT_COL_TEXT    (3u)   // after "> "
+#define UI_REFRESH_TICKS     (200u) // 100ms (200 * 0.5ms)
+
+static volatile uint8_t g_ui_pos   = 0;
+static volatile uint8_t g_ui_range = 0;
+static volatile uint8_t g_ui_err   = 0;
+static volatile uint8_t g_ui_ctrl  = 0;
+static volatile bool    g_ui_slave_valid = false;
+
+static volatile uint32_t g_ui_last_ok_tick = 0;
+static volatile uint32_t g_ui_last_fail_tick = 0;
+
+static char g_ui_msg[48] = "ready"; // main loop only (non-volatile OK)
+
+static void ui_set_msg(const char *s)
+{
+    // main loop only: 안전하게 짧게 복사
+    size_t n = strlen(s);
+    if (n >= sizeof(g_ui_msg)) n = sizeof(g_ui_msg) - 1;
+    memcpy(g_ui_msg, s, n);
+    g_ui_msg[n] = '\0';
+}
+
+static void ui_init(void)
+{
+    term_clear_screen();
+    term_cursor_home();
+    term_hide_cursor();
+
+    // template
+    uart_write_string_nb("[1] UART INPUT\r\n");
+    uart_write_string_nb("> \r\n");
+    uart_write_string_nb("\r\n");
+
+    uart_write_string_nb("[2] LIN STATE\r\n");
+    uart_write_string_nb("comm : \r\n");
+    uart_write_string_nb("state: \r\n");
+    uart_write_string_nb("req  : \r\n");
+    uart_write_string_nb("\r\n");
+
+    uart_write_string_nb("[3] SLAVE STATUS\r\n");
+    uart_write_string_nb("pos  : \r\n");
+    uart_write_string_nb("range: \r\n");
+    uart_write_string_nb("ctrl : \r\n");
+
+    // go input
+    term_cursor_pos(UI_ROW_INPUT_LINE, UI_INPUT_COL_TEXT);
+}
+
+static void ui_clear_input_line(void)
+{
+    term_cursor_pos(UI_ROW_INPUT_LINE, 1);
+    term_clear_line();
+    uart_write_string_nb("> ");
+    term_cursor_pos(UI_ROW_INPUT_LINE, UI_INPUT_COL_TEXT);
+}
+
+static void ui_refresh(void);
+
+// ============================================================
+// cmd_feed_char: UI 입력 라인에서만 동작 (CR/LF는 실행 트리거)
+// ============================================================
+static void cmd_feed_char(char ch,
+                          uint8_t *req_help,
+                          uint8_t *req_status,
+                          uint8_t *req_open,
+                          uint8_t *req_close,
+                          uint8_t *req_stuck)
+{
+    // backspace/delete
+    if (ch == '\b' || ch == 0x7F)
+    {
+        if (g_cmd_len > 0u)
+        {
+            g_cmd_len--;
+            g_cmd_buf[g_cmd_len] = '\0';
+
+            // 터미널에서 한 글자 지우기 (커서가 입력 라인에 있다는 가정)
+            uart_write_string_nb("\b \b");
+        }
+        return;
+    }
+
+    // endline: command commit
+    if (ch == '\r' || ch == '\n')
+    {
+        g_cmd_buf[g_cmd_len] = '\0';
+
+        if (strcmp(g_cmd_buf, "help") == 0 || strcmp(g_cmd_buf, "h") == 0)
+            *req_help = 1u;
+        else if (strcmp(g_cmd_buf, "status") == 0 || strcmp(g_cmd_buf, "s") == 0)
+            *req_status = 1u;
+        else if (strcmp(g_cmd_buf, "open") == 0 || strcmp(g_cmd_buf, "o") == 0)
+            *req_open = 1u;
+        else if (strcmp(g_cmd_buf, "close") == 0 || strcmp(g_cmd_buf, "c") == 0)
+            *req_close = 1u;
+        else if (strcmp(g_cmd_buf, "stuck") == 0 || strcmp(g_cmd_buf, "st") == 0)
+            *req_stuck = 1u;
+        else if (g_cmd_buf[0] != '\0')
+            ui_set_msg("unknown cmd (help/h)");
+
+        // reset input line UI
+        cmd_reset();
+        ui_clear_input_line();
+        return;
+    }
+
+    // normalize case
+    if (ch >= 'A' && ch <= 'Z') ch = (char)(ch - 'A' + 'a');
+
+    // printable only
+    if (ch < 0x20 || ch > 0x7E) return;
+
+    // append
+    if (g_cmd_len < (CMD_BUF_SIZE - 1u))
+    {
+        g_cmd_buf[g_cmd_len++] = ch;
+        g_cmd_buf[g_cmd_len] = '\0';
+
+        // echo on input line
+        uart_write_char_nb(ch);
+    }
+}
+
+// ============================================================
+// LPTMR ISR
+// ============================================================
+void LPTMR_ISR(void)
+{
+    LIN_DRV_TimeoutService(INST_LIN2);
+    g_tick500us++;
+    timerOverflowInterruptCount++;
+    LPTMR_DRV_ClearCompareFlag(INST_LPTMR_1);
+}
+
+uint32_t lin1TimerGetTimeIntervalCallback0(uint32_t *ns)
+{
+    static uint32_t previousCountValue = 0UL;
+    uint32_t counterValue;
+
+    counterValue = LPTMR_DRV_GetCounterValueByCount(INST_LPTMR_1);
+
+    uint32_t ovf;
+    ENTER_CRITICAL();
+    ovf = timerOverflowInterruptCount;
+    timerOverflowInterruptCount = 0U;
+    EXIT_CRITICAL();
+
+    *ns = ((uint32_t)(counterValue + (uint32_t)ovf * TIMER_COMPARE_VAL - previousCountValue))
+            * 1000U / TIMER_TICKS_1US;
+
+    previousCountValue = counterValue;
+    return 0UL;
+}
+
+// ============================================================
+// Button ISR
+// ============================================================
+static volatile bool g_btnOpen = false;
+static volatile bool g_btnClose = false;
+
+void BTNPORT_IRQHandler(void)
+{
+    uint32_t flags = PINS_DRV_GetPortIntFlag(BTN_PORT_NAME);
+
+    if (flags & (1UL << PORT_BTN_OPEN_INDEX))
+    {
+        g_btnOpen = true;
+        PINS_DRV_ClearPinIntFlagCmd(BTN_PORT_NAME, PORT_BTN_OPEN_INDEX);
+    }
+
+    if (flags & (1UL << PORT_BTN_CLOSE_INDEX))
+    {
+        g_btnClose = true;
+        PINS_DRV_ClearPinIntFlagCmd(BTN_PORT_NAME, PORT_BTN_CLOSE_INDEX);
+    }
+}
+
+// ============================================================
+// Frame Definition + Scheduler Table
+// ============================================================
+typedef enum { LIN_DIR_TX = 0, LIN_DIR_RX = 1 } lin_dir_t;
+
+typedef struct
+{
+    uint8_t    id;
+    lin_dir_t  dir;
+    uint8_t   *buf;
+    uint8_t    len;
+    uint16_t   timeoutCnt;
+} lin_frame_def_t;
+
+enum
+{
+    FRAME_IDX_CMD = 0,
+    FRAME_IDX_STATUS,
+    FRAME_IDX_COUNT
+};
+
+static lin_frame_def_t g_frames[FRAME_IDX_COUNT] =
+{
+    { .id = FRAME_MOTOR_CMD,    .dir = LIN_DIR_TX, .buf = g_txCmd,    .len = DATA_SIZE, .timeoutCnt = TIMEOUT_LIN_CNT },
+    { .id = FRAME_SLAVE_STATUS, .dir = LIN_DIR_RX, .buf = g_rxStatus, .len = DATA_SIZE, .timeoutCnt = TIMEOUT_LIN_CNT }
+};
+
+typedef struct
+{
+    uint8_t   frameIndex;
+    uint32_t  periodTicks;   // 0이면 비주기
+    uint32_t  nextDueTick;
+    uint8_t   priority;      // 작을수록 높음
+    bool      enabled;
+} lin_sched_entry_t;
+
+// 200ms = 200000us / 500us = 400 ticks
+#define TICKS_200MS (400U)
+
+enum
+{
+    SCHED_STATUS_POLL = 0,
+    SCHED_COUNT
+};
+
+static lin_sched_entry_t g_sched[SCHED_COUNT] =
+{
+    { .frameIndex = FRAME_IDX_STATUS, .periodTicks = TICKS_200MS, .nextDueTick = 0U, .priority = 10U, .enabled = true }
+};
+
+static void scheduler_init(uint32_t nowTick)
+{
+    for (uint32_t i = 0; i < SCHED_COUNT; i++)
+    {
+        if (!g_sched[i].enabled) continue;
+        g_sched[i].nextDueTick = nowTick + g_sched[i].periodTicks;
+    }
+}
+
+static int32_t scheduler_pick_due(uint32_t nowTick)
+{
+    int32_t best = -1;
+    uint8_t bestPrio = 0xFFU;
+
+    for (uint32_t i = 0; i < SCHED_COUNT; i++)
+    {
+        if (!g_sched[i].enabled) continue;
+        if (g_sched[i].periodTicks == 0U) continue;
+
+        if ((int32_t)(nowTick - g_sched[i].nextDueTick) >= 0)
+        {
+            if (g_sched[i].priority < bestPrio)
+            {
+                bestPrio = g_sched[i].priority;
+                best = (int32_t)i;
+            }
+        }
+    }
+    return best;
+}
+
+static void scheduler_on_fired(uint32_t schedIndex, uint32_t nowTick)
+{
+    if (g_sched[schedIndex].periodTicks != 0U)
+        g_sched[schedIndex].nextDueTick = nowTick + g_sched[schedIndex].periodTicks;
+}
+
+// ============================================================
+// Request object (transaction)
+// ============================================================
+typedef enum
+{
+    REQ_SRC_BTN = 0,
+    REQ_SRC_UART,
+    REQ_SRC_PERIODIC
+} req_source_t;
+
+typedef enum
+{
+    REQ_TYPE_NONE = 0,
+    REQ_TYPE_CMD,
+    REQ_TYPE_STATUS
+} req_type_t;
+
+typedef struct
+{
+    req_type_t   type;
+    req_source_t src;
+    uint8_t      frameIndex;
+
+    uint8_t      maxRetry;
+    uint8_t      retryCount;
+    uint32_t     deadlineTick; // 0이면 app deadline 미사용
+} lin_req_t;
+
+// ============================================================
+// Input coalescing (last-wins)
+// ============================================================
+static volatile bool         g_cmdPending = false;
+static volatile uint8_t      g_cmdTarget  = MOTOR_TARGET_LEFT;
+static volatile req_source_t g_cmdSrc     = REQ_SRC_UART;
+
+static volatile bool g_userStatusPending = false;
+
+// ============================================================
+// LIN Engine FSM (single in-flight request)
+// ============================================================
+typedef enum
+{
+    ENG_IDLE = 0,
+    ENG_WAIT_PID,
+    ENG_WAIT_TX,
+    ENG_WAIT_RX
+} lin_eng_state_t;
+
+static volatile lin_eng_state_t g_engState = ENG_IDLE;
+
+static volatile uint8_t   g_activeFrameIndex = 0U;
+static volatile lin_req_t g_activeReq;
+
+// callback flags
+#define LIN_F_PID_OK   (1UL << 0)
+#define LIN_F_TX_DONE  (1UL << 1)
+#define LIN_F_RX_DONE  (1UL << 2)
+#define LIN_F_ERROR    (1UL << 3)
+#define LIN_F_TIMEOUT  (1UL << 4)
+static volatile uint32_t g_linFlags = 0U;
+
+// ============================================================
+// LIN Callback: flags only
+// ============================================================
+lin_callback_t CallbackHandler(uint32_t instance, lin_state_t *linState)
+{
+    lin_callback_t ret = linState->Callback;
+    (void)instance;
+
+    if (linState->timeoutCounterFlag)
+    {
+        linState->timeoutCounterFlag = false;
+        g_linFlags |= (LIN_F_TIMEOUT | LIN_F_ERROR);
+        g_linErrCode = 5;
+        return ret;
+    }
+
+    g_lastEvent = (uint8_t)linState->currentEventId;
+
+    switch (linState->currentEventId)
+    {
+        case LIN_PID_OK:        g_linFlags |= LIN_F_PID_OK;  break;
+        case LIN_TX_COMPLETED:  g_linFlags |= LIN_F_TX_DONE; break;
+        case LIN_RX_COMPLETED:  g_linFlags |= LIN_F_RX_DONE; break;
+
+        case LIN_PID_ERROR:        g_linFlags |= LIN_F_ERROR; g_linErrCode = 1; break;
+        case LIN_CHECKSUM_ERROR:   g_linFlags |= LIN_F_ERROR; g_linErrCode = 2; break;
+        case LIN_READBACK_ERROR:   g_linFlags |= LIN_F_ERROR; g_linErrCode = 3; break;
+        case LIN_FRAME_ERROR:      g_linFlags |= LIN_F_ERROR; g_linErrCode = 4; break;
+
+        default: break;
+    }
+
+    return ret;
+}
+
+static void engine_reset_to_idle(void)
+{
+    (void)LIN_DRV_GotoIdleState(INST_LIN2);
+    g_engState = ENG_IDLE;
+
+    ENTER_CRITICAL();
+    g_linFlags = 0U;
+    EXIT_CRITICAL();
+}
+
+static bool engine_start_request(const lin_req_t *req)
+{
+    if (g_engState != ENG_IDLE) return false;
+
+    // transaction start: clear errcode (success path will leave NONE unless error)
+    g_linErrCode = 0;
+    g_lastEvent  = 0;
+
+    g_activeReq = *req;
+    g_activeFrameIndex = req->frameIndex;
+
+    (void)LIN_DRV_MasterSendHeader(INST_LIN2, g_frames[g_activeFrameIndex].id);
+    g_engState = ENG_WAIT_PID;
+    return true;
+}
+
+// 완료 후처리: UI 반영 (로그 없음)
+static void on_request_done(const lin_req_t *req, bool ok)
+{
+    if (!ok)
+    {
+        g_ui_last_fail_tick = (uint32_t)g_tick500us;
+        ui_set_msg("LIN FAIL");
+        led_yellow();
+        return;
+    }
+
+    g_ui_last_ok_tick = (uint32_t)g_tick500us;
+
+    if (req->type == REQ_TYPE_STATUS)
+    {
+        g_ui_pos   = g_rxStatus[0];
+        g_ui_range = g_rxStatus[1];
+        g_ui_err   = g_rxStatus[2];
+        g_ui_ctrl  = g_rxStatus[3];
+        g_ui_slave_valid = true;
+
+        apply_led_by_range(g_ui_range);
+        ui_set_msg("STATUS updated");
+        return;
+    }
+
+    if (req->type == REQ_TYPE_CMD)
+    {
+        // CMD 후 1회 STATUS 동기화
+        g_userStatusPending = true;
+        ui_set_msg("CMD ok -> sync status");
+        return;
+    }
+}
+
+// 엔진 step: callback flag 스냅샷 후 FSM 진행
+static void engine_step(void)
+{
+    uint32_t flags;
+    ENTER_CRITICAL();
+    flags = g_linFlags;
+    g_linFlags = 0U;
+    EXIT_CRITICAL();
+
+    // app-level deadline
+    if (g_engState != ENG_IDLE && g_activeReq.deadlineTick != 0U)
+    {
+        uint32_t now = (uint32_t)g_tick500us;
+        if ((int32_t)(now - g_activeReq.deadlineTick) >= 0)
+        {
+            ui_set_msg("DEADLINE");
+            on_request_done((const lin_req_t *)&g_activeReq, false);
+            engine_reset_to_idle();
+            return;
+        }
+    }
+
+    // error handling + retry
+    if (flags & LIN_F_ERROR)
+    {
+        if (g_activeReq.retryCount < g_activeReq.maxRetry)
+        {
+            g_activeReq.retryCount++;
+            ui_set_msg("retry...");
+            engine_reset_to_idle();
+            (void)engine_start_request((const lin_req_t *)&g_activeReq);
+            return;
+        }
+
+        on_request_done((const lin_req_t *)&g_activeReq, false);
+        engine_reset_to_idle();
+        return;
+    }
+
+    // WAIT_PID -> send/recv
+    if (g_engState == ENG_WAIT_PID)
+    {
+        if (flags & LIN_F_PID_OK)
+        {
+            LIN_DRV_SetTimeoutCounter(INST_LIN2, g_frames[g_activeFrameIndex].timeoutCnt);
+
+            if (g_frames[g_activeFrameIndex].dir == LIN_DIR_TX)
+            {
+                (void)LIN_DRV_SendFrameData(INST_LIN2,
+                                            g_frames[g_activeFrameIndex].buf,
+                                            g_frames[g_activeFrameIndex].len);
+                g_engState = ENG_WAIT_TX;
+            }
+            else
+            {
+                (void)LIN_DRV_ReceiveFrameData(INST_LIN2,
+                                               g_frames[g_activeFrameIndex].buf,
+                                               g_frames[g_activeFrameIndex].len);
+                g_engState = ENG_WAIT_RX;
+            }
+        }
+        return;
+    }
+
+    // WAIT_TX -> done
+    if (g_engState == ENG_WAIT_TX)
+    {
+        if (flags & LIN_F_TX_DONE)
+        {
+            on_request_done((const lin_req_t *)&g_activeReq, true);
+            engine_reset_to_idle();
+        }
+        return;
+    }
+
+    // WAIT_RX -> done
+    if (g_engState == ENG_WAIT_RX)
+    {
+        if (flags & LIN_F_RX_DONE)
+        {
+            on_request_done((const lin_req_t *)&g_activeReq, true);
+            engine_reset_to_idle();
+        }
+        return;
+    }
+}
+
+// ============================================================
+// Dispatcher: CMD(event) > STATUS(user) > STATUS(periodic)
+// ============================================================
+static bool dispatcher_make_next_request(lin_req_t *outReq, uint32_t nowTick, int32_t *outSchedIndex)
+{
+    *outSchedIndex = -1;
+    memset(outReq, 0, sizeof(*outReq));
+
+    if (g_cmdPending)
+    {
+        uint8_t tgt = g_cmdTarget;
+        req_source_t src = g_cmdSrc;
+        g_cmdPending = false;
+
+        memset(g_txCmd, 0, sizeof(g_txCmd));
+        g_txCmd[0] = tgt;
+
+        outReq->type = REQ_TYPE_CMD;
+        outReq->src  = src;
+        outReq->frameIndex = FRAME_IDX_CMD;
+
+        outReq->maxRetry = 1U;
+        outReq->retryCount = 0U;
+        outReq->deadlineTick = nowTick + 300U; // 150ms
+        return true;
+    }
+
+    if (g_userStatusPending)
+    {
+        g_userStatusPending = false;
+
+        outReq->type = REQ_TYPE_STATUS;
+        outReq->src  = REQ_SRC_UART;
+        outReq->frameIndex = FRAME_IDX_STATUS;
+
+        outReq->maxRetry = 2U;
+        outReq->retryCount = 0U;
+        outReq->deadlineTick = nowTick + 400U; // 200ms
+        return true;
+    }
+
+    int32_t si = scheduler_pick_due(nowTick);
+    if (si >= 0)
+    {
+        *outSchedIndex = si;
+
+        outReq->type = REQ_TYPE_STATUS;
+        outReq->src  = REQ_SRC_PERIODIC;
+        outReq->frameIndex = g_sched[si].frameIndex;
+
+        outReq->maxRetry = 1U;
+        outReq->retryCount = 0U;
+        outReq->deadlineTick = nowTick + 400U;
+        return true;
+    }
+
+    return false;
+}
+
+// ============================================================
+// Input hooks
+// ============================================================
+static void request_motor_target(req_source_t src, uint8_t target)
+{
+    if (target > MOTOR_TARGET_STUCK) target = MOTOR_TARGET_STUCK;
+
+    g_cmdSrc = src;
+    g_cmdTarget = target;
+    g_cmdPending = true; // last-wins
+}
+
+static void request_status_now(req_source_t src)
+{
+    (void)src;
+    g_userStatusPending = true; // coalesce
+}
+
+// ============================================================
+// UI refresh: overwrite fixed region, then restore cursor to input
+// ============================================================
+static void ui_refresh(void)
+{
+    char line[96];
+
+    // [2] LIN STATE
+    term_cursor_pos(UI_ROW_LIN_1, 1); term_clear_line();
+    {
+        const char *comm = (g_linErrCode == 0) ? "OK" : "ERR";
+        (void)snprintf(line, sizeof(line), "comm : %s   lastErr=%s   lastEvent=%u   msg=%s",
+                       comm, lin_err_str(g_linErrCode), (unsigned)g_lastEvent, g_ui_msg);
+        uart_write_string_nb(line);
+    }
+
+    term_cursor_pos(UI_ROW_LIN_2, 1); term_clear_line();
+    {
+        const char *st =
+            (g_engState == ENG_IDLE)     ? "IDLE" :
+            (g_engState == ENG_WAIT_PID) ? "WAIT_PID" :
+            (g_engState == ENG_WAIT_TX)  ? "WAIT_TX" : "WAIT_RX";
+
+        (void)snprintf(line, sizeof(line), "state: %s   tick=%lu",
+                       st, (unsigned long)g_tick500us);
+        uart_write_string_nb(line);
+    }
+
+    term_cursor_pos(UI_ROW_LIN_3, 1); term_clear_line();
+    {
+        if (g_engState != ENG_IDLE)
+        {
+            const char *t = (g_activeReq.type == REQ_TYPE_CMD) ? "CMD" :
+                            (g_activeReq.type == REQ_TYPE_STATUS) ? "STATUS" : "UNK";
+            (void)snprintf(line, sizeof(line),
+                           "req  : %s   retry=%u/%u   deadline=%lu",
+                           t,
+                           (unsigned)g_activeReq.retryCount,
+                           (unsigned)g_activeReq.maxRetry,
+                           (unsigned long)g_activeReq.deadlineTick);
+        }
+        else
+        {
+            uint32_t now = (uint32_t)g_tick500us;
+
+            // g_tick500us는 0.5ms 단위 tick
+            // ms = ticks / 2
+            uint32_t ok_age_ms   = 0U;
+            uint32_t fail_age_ms = 0U;
+
+            if (g_ui_last_ok_tick != 0U)
+                ok_age_ms = (uint32_t)((now - g_ui_last_ok_tick) / 2U);
+
+            if (g_ui_last_fail_tick != 0U)
+                fail_age_ms = (uint32_t)((now - g_ui_last_fail_tick) / 2U);
+
+            (void)snprintf(line, sizeof(line),
+                           "req  : (none)   lastOK=%lums ago   lastFAIL=%lums ago",
+                           (unsigned long)ok_age_ms,
+                           (unsigned long)fail_age_ms);
+        }
+        uart_write_string_nb(line);
+    }
+
+    // [3] SLAVE STATUS
+    term_cursor_pos(UI_ROW_SLAVE_1, 1); term_clear_line();
+    if (g_ui_slave_valid)
+        (void)snprintf(line, sizeof(line), "pos  : %3u %%", (unsigned)g_ui_pos);
+    else
+        (void)snprintf(line, sizeof(line), "pos  : (no data)");
+    uart_write_string_nb(line);
+
+    term_cursor_pos(UI_ROW_SLAVE_2, 1); term_clear_line();
+    if (g_ui_slave_valid)
+        (void)snprintf(line, sizeof(line), "range: %s", range_str(g_ui_range));
+    else
+        (void)snprintf(line, sizeof(line), "range: (no data)");
+    uart_write_string_nb(line);
+
+    term_cursor_pos(UI_ROW_SLAVE_3, 1); term_clear_line();
+    if (g_ui_slave_valid)
+        (void)snprintf(line, sizeof(line), "ctrl : %s   err=0x%02X",
+                       control_str(g_ui_ctrl), (unsigned)g_ui_err);
+    else
+        (void)snprintf(line, sizeof(line), "ctrl : (no data)");
+    uart_write_string_nb(line);
+
+    // Restore cursor to input line at current command length
+    term_cursor_pos(UI_ROW_INPUT_LINE, (uint8_t)(UI_INPUT_COL_TEXT + g_cmd_len));
+}
+
+// ============================================================
+// Master task (integrated)
+// ============================================================
+static void lin_master_task(void)
+{
+    uart_io_init();
+
+    // LIN init
+    (void)LIN_DRV_Init(INST_LIN2, &lin2_InitConfig0, &lin2_State);
+    (void)LIN_DRV_InstallCallback(INST_LIN2, (lin_callback_t)CallbackHandler);
+
+    led_all_off();
+
+    // scheduler init
+    scheduler_init((uint32_t)g_tick500us);
+    engine_reset_to_idle();
+
+    // UI init
+    cmd_reset();
+    ui_init();
+    ui_set_msg("type: open/close/stuck/status/help");
+    ui_refresh();
+
+    uart_tx_drain_step();
+
+    // 버튼 디바운스(20ms)
+    uint32_t lastBtnOpenTick  = 0U;
+    uint32_t lastBtnCloseTick = 0U;
+    const uint32_t debounceTicks = 40U; // 20ms
+
+    uint32_t lastUi = (uint32_t)g_tick500us;
+
+    for (;;)
+    {
+        // UART progress
+        uart_rx_collect_and_rearm();
+        uart_tx_poll_complete();
+        uart_tx_drain_step();
+
+        // engine step
+        engine_step();
+
+        // CLI parse
+        uint8_t req_help = 0u, req_status = 0u, req_open = 0u, req_close = 0u, req_stuck = 0u;
+        uint8_t b;
+
+        while (uart_rx_ring_pop(&b))
+        {
+            cmd_feed_char((char)b, &req_help, &req_status, &req_open, &req_close, &req_stuck);
+        }
+
+        // handle commands (no logs -> UI msg만 변경)
+        if (req_help)
+        {
+            ui_set_msg("cmd: open(o) close(c) stuck(st) status(s) help(h)");
+        }
+
+        if (req_open)
+        {
+            ui_set_msg("CMD: OPEN");
+            request_motor_target(REQ_SRC_UART, MOTOR_TARGET_LEFT);
+        }
+        if (req_close)
+        {
+            ui_set_msg("CMD: CLOSE");
+            request_motor_target(REQ_SRC_UART, MOTOR_TARGET_RIGHT);
+        }
+        if (req_stuck)
+        {
+            ui_set_msg("CMD: STUCK");
+            request_motor_target(REQ_SRC_UART, MOTOR_TARGET_STUCK);
+        }
+        if (req_status)
+        {
+            ui_set_msg("STATUS: requested");
+            request_status_now(REQ_SRC_UART);
+        }
+
+        // Buttons -> requests (with debounce)
+        if (g_btnOpen)
+        {
+            g_btnOpen = false;
+            uint32_t now = (uint32_t)g_tick500us;
+            if ((uint32_t)(now - lastBtnOpenTick) >= debounceTicks)
+            {
+                lastBtnOpenTick = now;
+                ui_set_msg("BTN: OPEN");
+                request_motor_target(REQ_SRC_BTN, MOTOR_TARGET_LEFT);
+            }
+        }
+
+        if (g_btnClose)
+        {
+            g_btnClose = false;
+            uint32_t now = (uint32_t)g_tick500us;
+            if ((uint32_t)(now - lastBtnCloseTick) >= debounceTicks)
+            {
+                lastBtnCloseTick = now;
+                ui_set_msg("BTN: CLOSE");
+                request_motor_target(REQ_SRC_BTN, MOTOR_TARGET_RIGHT);
+            }
+        }
+
+        // dispatch next request if idle
+        if (g_engState == ENG_IDLE)
+        {
+            lin_req_t req;
+            int32_t schedIndex;
+            uint32_t now = (uint32_t)g_tick500us;
+
+            if (dispatcher_make_next_request(&req, now, &schedIndex))
+            {
+                if (engine_start_request(&req))
+                {
+                    if (schedIndex >= 0)
+                        scheduler_on_fired((uint32_t)schedIndex, now);
+                }
+            }
+        }
+
+        // UI refresh periodic
+        {
+            uint32_t now = (uint32_t)g_tick500us;
+            if ((uint32_t)(now - lastUi) >= UI_REFRESH_TICKS)
+            {
+                lastUi = now;
+                ui_refresh();
+            }
+        }
+
+        if (exit_code != 0) break;
+    }
+
+    // leaving: show cursor back
+    term_show_cursor();
+}
+
+// ============================================================
+// main
+// ============================================================
+int main(void)
+{
+    CLOCK_SYS_Init(g_clockManConfigsArr, CLOCK_MANAGER_CONFIG_CNT,
+                   g_clockManCallbacksArr, CLOCK_MANAGER_CALLBACK_CNT);
+    CLOCK_SYS_UpdateConfiguration(0U, CLOCK_MANAGER_POLICY_AGREEMENT);
+
+    PINS_DRV_Init(NUM_OF_CONFIGURED_PINS0, g_pin_mux_InitConfigArr0);
+
+#if USE_LIN_XCVR
+    PINS_DRV_SetPinsDirection(LIN_XCVR_ENABLE_GPIO_PORT, LIN_XCVR_ENABLE_MASK);
+    PINS_DRV_SetPins(LIN_XCVR_ENABLE_GPIO_PORT, LIN_XCVR_ENABLE_MASK);
+#endif
+
+    // Button IRQ (PORTC)
+    INT_SYS_InstallHandler(BTN_PORT_IRQn, BTNPORT_IRQHandler, (isr_t *)NULL);
+    INT_SYS_EnableIRQ(BTN_PORT_IRQn);
+
+    // LPTMR
+    LPTMR_DRV_Init(INST_LPTMR_1, &lptmr_1_config0, false);
+    INT_SYS_InstallHandler(LPTMR0_IRQn, LPTMR_ISR, (isr_t *)NULL);
+    INT_SYS_EnableIRQ(LPTMR0_IRQn);
+    LPTMR_DRV_StartCounter(INST_LPTMR_1);
+
+    lin_master_task();
+
+    for (;;)
+    {
+        if (exit_code != 0) break;
+    }
+    return exit_code;
+}

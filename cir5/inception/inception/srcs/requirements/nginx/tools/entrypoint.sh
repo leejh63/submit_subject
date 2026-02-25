@@ -13,5 +13,5 @@ if [ ! -f "$CRT" ] || [ ! -f "$KEY" ]; then
     -keyout "$KEY" -out "$CRT" -days 365 \
     -subj "/CN=$CN"
 fi
-
+echo "[nginx] Done!"
 exec "$@"

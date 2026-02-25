@@ -10,4 +10,7 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 
 EXPOSE 3306
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
-CMD ["mariadbd", "--bind-address=0.0.0.0"]
+
+# 최종 PID 1로 실행될 프로세스
+CMD ["mariadbd", "--user=mysql", "--datadir=/var/lib/mysql", "--bind-address=0.0.0.0", "--port=3306"]
+
