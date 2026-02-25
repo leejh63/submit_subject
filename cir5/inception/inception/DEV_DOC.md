@@ -1,3 +1,109 @@
+정확히 말하면 이렇게 정리하면 된다:
+
+Dockerfile / 앱 설정 → “컨테이너 내부에서 실제로 리슨하는 포트”
+docker-compose.yml → “호스트와 연결할 포트 매핑”
+
+하지만 조금 더 정확하게 구조를 이해해야 헷갈리지 않는다.
+
+1️⃣ 내부 포트는 누가 결정하나?
+
+내부 포트는 애플리케이션이 결정한다.
+
+예시:
+
+MariaDB
+mariadbd --port=3306
+Nginx
+listen 443;
+PHP-FPM
+listen = 9000
+
+이게 “진짜 내부 포트”다.
+
+Dockerfile의 EXPOSE 3306 이런 건:
+
+문서적 메타데이터일 뿐
+실제 포트를 바꾸지 않는다.
+
+2️⃣ docker-compose의 ports는 무엇인가?
+ports:
+  - "443:443"
+
+의미:
+
+호스트 443 → 컨테이너 443
+
+왼쪽 = 호스트
+오른쪽 = 컨테이너 내부
+
+3️⃣ 핵심 구조 그림
+[ Host ]
+  443
+   ↓
+[ nginx container ]
+  443 (실제 nginx listen 포트)
+
+----------------------------------
+
+[ wordpress container ]
+  9000 (php-fpm)
+
+[ mariadb container ]
+  3306 (mariadbd)
+
+wordpress ↔ mariadb는 같은 네트워크 내부 통신이라
+ports: 없어도 된다.
+
+4️⃣ 그래서 네 질문에 대한 정확한 답
+
+도커 컴포즈는 외부 포트
+도커파일/스크립트는 내부 포트?
+
+✔ 거의 맞다.
+✔ 더 정확히는:
+
+앱 설정 / 실행 커맨드가 내부 포트 결정
+
+Dockerfile은 그 실행 환경을 만드는 역할
+
+Compose는 외부 연결과 네트워크 구조를 정하는 역할
+
+5️⃣ 예시로 완전 정리
+🔵 내부 포트를 3307로 바꾸고 싶다
+1️⃣ MariaDB 내부 설정 변경
+CMD ["mariadbd", "--port=3307"]
+2️⃣ WordPress DB_PORT 변경
+environment:
+  DB_PORT: 3307
+
+Compose에 ports 없어도 내부 통신은 정상 동작.
+
+🔵 외부에서 8443으로 접속하고 싶다
+ports:
+  - "8443:443"
+
+→ nginx는 그대로 443 리슨
+→ 호스트는 8443으로 접속
+
+6️⃣ 흔히 생기는 오해
+
+❌ EXPOSE 바꾸면 포트 바뀐다
+→ 아님
+
+❌ compose에서 ports 오른쪽 숫자 바꾸면 내부 포트 바뀐다
+→ 아님
+
+❌ 내부 포트 바꾸려면 compose만 수정하면 된다
+→ 아님, 앱 설정도 수정해야 함
+
+7️⃣ 한 줄 핵심
+
+내부 포트는 "프로그램이 결정",
+외부 포트는 "compose가 매핑".
+
+
+
+
 # DEV_DOC — Inception (jaeholee)
 
 ## 0. 초기 설정 (최초 1회 실행)

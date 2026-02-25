@@ -104,6 +104,26 @@ if [ ! -f "${WEBROOT}/wp-config.php" ]; then
   chmod 640 wp-config.php 2>/dev/null || true
 fi
 
+## 아래와 같이 변경하면 좀더 쉽게 포트 변경이 가능하다!
+# DB_HOSTPORT="${DB_HOST}:${DB_PORT}"
+
+# if [ ! -f "${WEBROOT}/wp-config.php" ]; then
+#   log "create wp-config.php"
+#   cd "${WEBROOT}"
+#   cp wp-config-sample.php wp-config.php
+#   sed -i "s/database_name_here/${MYSQL_DATABASE}/" wp-config.php
+#   sed -i "s/username_here/${MYSQL_USER}/" wp-config.php
+#   sed -i "s/password_here/${DB_PW}/" wp-config.php
+#   sed -i "s/localhost/${DB_HOSTPORT}/" wp-config.php
+#   chown www-data:www-data wp-config.php 2>/dev/null || true
+#   chmod 640 wp-config.php 2>/dev/null || true
+# else
+#   # 이미 만들어진 경우도 DB_HOST를 강제로 mariadb:4000으로 고정 (볼륨 때문에 중요)
+#   log "wp-config.php exists -> ensure DB_HOST=${DB_HOSTPORT}"
+#   sed -i "s/define( *'DB_HOST' *, *'[^']*' *);/define('DB_HOST', '${DB_HOSTPORT}');/" "${WEBROOT}/wp-config.php" || true
+# fi
+
+
 # ----------------------------
 # 4) install WP if not installed (DEBUG)
 # ----------------------------
