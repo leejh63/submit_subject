@@ -1,6 +1,9 @@
 # valgrind --tool=cachegrind ./PmergeMe $(cat input.txt) >/dev/null
 # cg_annotate cachegrind.out.* | head -n 80
 # 캐시 미스 확인 하는것
+
+# 테스트 용 명령어
+# ./PmergeMe $(shuf -i 1-1000 -n 1000 | tr '\n' ' ')
 NAME 		:= PmergeMe
 
 CPP 		:= c++ 
