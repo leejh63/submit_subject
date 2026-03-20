@@ -46,7 +46,6 @@ static status_t UartService_PopPendingRx(UartPort *port, uint8_t *outByte)
     rxPending = &port->channel.rxPending;
     if (UartService_RxPending_IsEmpty(rxPending) != 0U)
         return STATUS_BUSY;
-
     *outByte = rxPending->buffer[rxPending->head];
     rxPending->head = UartService_RxPending_NextIndex(rxPending->head);
     return STATUS_SUCCESS;
@@ -219,7 +218,7 @@ void UartService_OnRxByte(UartPort *port, uint8_t rxByte)
         rxLine->lineReady = 1U;
         return;
     }
-
+    // 백스페이스 기능
     if ((rxByte == UART_CHAR_BACKSPACE_1) || (rxByte == UART_CHAR_BACKSPACE_2))
     {
         if (rxLine->length > 0U)
@@ -230,8 +229,10 @@ void UartService_OnRxByte(UartPort *port, uint8_t rxByte)
         return;
     }
 
+    // 아스키 문자만 허용
     if ((rxByte < 32U) || (rxByte > 126U))
         return;
+
 
     if (rxLine->length >= (UART_SERVICE_RX_BUFFER_SIZE - 1U))
     {
@@ -314,7 +315,8 @@ void UartService_ProcessRx(UartPort *port)
 
     if (port == NULL)
         return;
-
+    // 질문 함수로 만드는게 좋아보이는데 아닌가?
+    // rxPending_overflow_check()
     if (port->channel.rxPending.overflow != 0U)
     {
         UartService_ResetRxPending(port);

@@ -6,8 +6,15 @@
 
 #include "app_ctrl_command.h"
 
-typedef void (*AppCtrlInputLocalHandler)(const AppCtrlInputSnapshot *snapshot,
-                                      AppCtrlInputResult         *outResult);
+static const AppCtrlInputLocalCommand g_ctrlInputLocalCommands[] =
+{
+    {"help",   AppCtrlInput_LocalHelp},
+    {"hello",  AppCtrlInput_LocalHello},
+    {"ping",   AppCtrlInput_LocalPing},
+    {"status", AppCtrlInput_LocalStatus}
+};
+
+typedef void (*AppCtrlInputLocalHandler)(const AppCtrlInputSnapshot *snapshot, AppCtrlInputResult         *outResult);
 
 typedef struct
 {
@@ -29,20 +36,6 @@ static void AppCtrlInput_SetText(AppCtrlInputResult *result, const char *text)
     (void)snprintf(result->text, sizeof(result->text), "%s", text);
 }
 
-static void AppCtrlInput_LocalHelp(const AppCtrlInputSnapshot *snapshot,
-                                AppCtrlInputResult         *outResult)
-{
-    if (outResult == NULL)
-        return;
-
-    (void)snapshot;
-
-    (void)snprintf(outResult->text,
-                   sizeof(outResult->text),
-                   "cmd: help hello ping status %s",
-                   AppCtrlCommand_GetHelpText());
-}
-
 static void AppCtrlInput_LocalHello(const AppCtrlInputSnapshot *snapshot,
                                  AppCtrlInputResult         *outResult)
 {
@@ -57,6 +50,23 @@ static void AppCtrlInput_LocalPing(const AppCtrlInputSnapshot *snapshot,
     AppCtrlInput_SetText(outResult, "pong");
 }
 
+// 질문 일관성없는거 아닌가?
+static void AppCtrlInput_LocalHelp(const AppCtrlInputSnapshot *snapshot,
+                                AppCtrlInputResult         *outResult)
+{
+    if (outResult == NULL)
+        return;
+
+    (void)snapshot;
+
+    (void)snprintf(outResult->text,
+                   sizeof(outResult->text),
+                   "cmd: help hello ping status %s",
+                   AppCtrlCommand_GetHelpText());
+}
+
+// 질문 일관성없는거 아닌가? snprintf 말고 헬퍼를 사용해서 va_arg 가변인자를 사용하는게 좋을까?
+// 그런데 그걸 사용할바에는 그냥 이런 방식으로 진행하는게 좀더 좋을것같은데
 static void AppCtrlInput_LocalStatus(const AppCtrlInputSnapshot *snapshot,
                                   AppCtrlInputResult         *outResult)
 {
@@ -75,14 +85,6 @@ static void AppCtrlInput_LocalStatus(const AppCtrlInputSnapshot *snapshot,
                    (unsigned int)snapshot->resultQueueCount,
                    (unsigned int)snapshot->resultQueueCapacity);
 }
-
-static const AppCtrlInputLocalCommand g_ctrlInputLocalCommands[] =
-{
-    {"help",   AppCtrlInput_LocalHelp},
-    {"hello",  AppCtrlInput_LocalHello},
-    {"ping",   AppCtrlInput_LocalPing},
-    {"status", AppCtrlInput_LocalStatus}
-};
 
 static uint8_t AppCtrlInput_TryHandleLocalCommand(const char              *line,
                                                const AppCtrlInputSnapshot *snapshot,
@@ -131,14 +133,14 @@ static status_t AppCtrlInput_HandleRemoteCommand(const char      *line,
         AppCtrlInput_SetText(outResult, "[error] unsupported command");
         return STATUS_ERROR;
     }
-
+    // AppCtrlCommand_can_Rx_box_push() 이게 좀더 좋을라나?
     pushOk = AppCtrlCommandMailbox_Push(mailbox, &cmd);
     if (pushOk == 0U)
     {
         AppCtrlInput_SetText(outResult, "[busy] can cmd queue full");
         return STATUS_BUSY;
     }
-
+    // AppCtrlCommand_FormatSummary can push 결과 uart의 결과로
     if (AppCtrlCommand_FormatSummary(&cmd,
                               outResult->text,
                               (uint16_t)sizeof(outResult->text),
@@ -159,15 +161,15 @@ void AppCtrlInputResult_Clear(AppCtrlInputResult *result)
 }
 
 status_t AppCtrlInput_HandleLine(const char              *line,
-                              const AppCtrlInputSnapshot *snapshot,
-                              AppCtrlCommandMailbox             *mailbox,
-                              AppCtrlInputResult         *outResult)
+                                 const AppCtrlInputSnapshot *snapshot,
+                                 AppCtrlCommandMailbox      *mailbox,
+                                 AppCtrlInputResult         *outResult)
 {
     if (line == NULL || snapshot == NULL || mailbox == NULL || outResult == NULL)
         return STATUS_ERROR;
 
     AppCtrlInputResult_Clear(outResult);
-
+    // 현재 help 문자열 전부 안찍힘 왜? 라인제한 존재
     if (AppCtrlInput_TryHandleLocalCommand(line, snapshot, outResult) != 0U)
         return STATUS_SUCCESS;
 

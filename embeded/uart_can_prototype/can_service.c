@@ -276,7 +276,7 @@ static uint8_t CanService_SendMessage(CanService *service, const CanMessage *mes
 
     if (service == NULL || message == NULL)
         return 0U;
-
+// 인코딩진행
     if (CanProto_EncodeMessage(&service->proto, message, &list) == 0U)
     {
         service->sendFailCount++;
@@ -290,7 +290,7 @@ static uint8_t CanService_SendMessage(CanService *service, const CanMessage *mes
         service->lastError = CAN_SERVICE_ERROR_PROTOCOL_ERROR;
         return 0U;
     }
-
+// 이건 또 왜 sendframe 이야 push 이런게 아니라... 여기서 큐 푸시 발생
     if (CanTransport_SendFrame(&service->transport, &list.frames[0]) == 0U)
     {
         service->sendFailCount++;
@@ -495,9 +495,11 @@ void CanService_Task(CanService *service, uint32_t nowMs)
         return;
 
     service->currentTickMs = nowMs;
-    // 추후 작업이 필요할 수도 있으니 일단 인터페이스는 맞춰 둠
+    // 원래 prot에서 인/디코딩을 진행할텐데 뭐야잉거
     CanProto_Task(&service->proto, nowMs);
+    // hw rx큐에서 teansport쪽 rx큐로 옮기는작업 및 CanTransport_ProcessTx데이터 hw를 통해 보냄
     CanTransport_Task(&service->transport, nowMs);
+    // teansport쪽 큐에서 데이터 꺼내서 디코딩 및 적절한 rx큐에 삽입
     CanService_ProcessRx(service);
     CanService_ProcessTimeouts(service);
 }
@@ -592,7 +594,7 @@ uint8_t CanService_SendResponse(CanService *service,
 
     if (CanService_IsValidTarget(targetNodeId) == 0U || requestId == 0U)
         return 0U;
-
+// 이런거 헬퍼로 빼는게 좋을것 같긴함
     (void)memset(&message, 0, sizeof(message));
     message.version = CAN_PROTO_VERSION_V1;
     message.messageType = CAN_MSG_RESPONSE;

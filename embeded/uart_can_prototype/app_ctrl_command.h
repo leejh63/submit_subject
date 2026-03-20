@@ -82,9 +82,13 @@ typedef enum
 } AppCtrlCommandParseResult;
 
 void AppCtrlCommand_Clear(AppCtrlCommand *cmd);
+
 AppCtrlCommandParseResult AppCtrlCommand_Parse(const char *input, AppCtrlCommand *outCmd);
+
 const char *AppCtrlCommand_TypeToString(AppCtrlCommandType type);
+
 const char *AppCtrlCommand_GetHelpText(void);
+
 uint8_t AppCtrlCommand_FormatSummary(const AppCtrlCommand *cmd,
                                      char                 *buffer,
                                      uint16_t              bufferSize,

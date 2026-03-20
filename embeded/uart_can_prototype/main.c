@@ -29,6 +29,15 @@ int main(void)
 // 이거에 대한 대처도 필요해보임
 // 일단 태스크 처리 방식의 경우 지금당장 수정사항은 아닌듯 보임
 // 추후 수정 고민중
+// can tx, rx를 좀더 확실하게 분리하는게 좋을듯
+// 또한 캔 통신 레이어가 완벽히 분할이 엉성하게 되어 잇는듯.
+// 느낌상 특히 service, trans, proto 일부 가 엉성하게 분리되어잇는듯
+// 다만 tx, rx 어느정도 분리는 되어있는 상황이지만 
+// tx, rx가 하나의 태스크함수에서 합쳐져있음
+// 사실상 아래처럼 표시하는게 좋지않을라나?
+// ctrl_command_mail_box    > ctrl_uart_To_can
+// ctrl_result_box          > ctrl_can_To_uart
+//  mail_box > uart_To_can // result_box > can_To_uart.
     status = Runtime_Init();
     if (status != STATUS_SUCCESS)
     {

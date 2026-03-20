@@ -8,6 +8,7 @@
 #include "app_ctrl_input.h"
 #include "app_ctrl_result_box.h"
 #include "runtime_tick.h"
+#include "peripherals_lpuart_1.h"
 
 #define APP_UART_CONSOLE_ROW_INPUT        6U
 #define APP_UART_CONSOLE_ROW_TASK_LINE1   9U
@@ -16,6 +17,22 @@
 #define APP_UART_CONSOLE_ROW_RESULT      14U
 #define APP_UART_CONSOLE_ROW_VALUE       17U
 #define APP_UART_CONSOLE_RENDER_BUFFER_SIZE  256U
+
+
+
+typedef struct
+{
+    uint32_t                    instance;
+    lpuart_state_t             *driverState;
+    const lpuart_user_config_t *userConfig;
+} AppUartConsoleHwConfig;
+
+static const AppUartConsoleHwConfig g_appUartConsoleHwConfig =
+{
+    INST_LPUART_1,
+    &lpUartState1,
+    &lpuart_1_InitConfig0
+};
 
 static void AppUartConsole_UpdateInputView(AppUartConsoleContext *node);
 static void AppUartConsole_RequestFullRefresh(AppUartConsoleContext *node);
@@ -420,25 +437,28 @@ static void AppUartConsole_RenderValueLine(AppUartConsoleContext *node)
 }
 
 status_t AppUartConsole_Init(AppUartConsoleContext *node,
-                             const AppUartConsoleConfig *config)
+                             AppCtrlCommandMailbox *commandMailbox,
+                             AppCtrlResultBox *resultBox,
+                             uint8_t nodeId)
 {
     status_t status;
 
-    if ((node == NULL) || (config == NULL))
+    if ((node == NULL) || (commandMailbox == NULL) || (resultBox == NULL))
         return STATUS_ERROR;
 
-    if ((config->driverState == NULL) || (config->userConfig == NULL))
+    if ((g_appUartConsoleHwConfig.driverState == NULL) ||
+        (g_appUartConsoleHwConfig.userConfig == NULL))
         return STATUS_ERROR;
 
     AppUartConsole_Clear(node);
-    node->commandMailbox = config->commandMailbox;
-    node->resultBox = config->resultBox;
-    node->nodeId = config->nodeId;
+    node->commandMailbox = commandMailbox;
+    node->resultBox = resultBox;
+    node->nodeId = nodeId;
 
     status = UartService_Init(&node->uart,
-                              config->instance,
-                              config->driverState,
-                              config->userConfig);
+                              g_appUartConsoleHwConfig.instance,
+                              g_appUartConsoleHwConfig.driverState,
+                              g_appUartConsoleHwConfig.userConfig);
     if (status != STATUS_SUCCESS)
     {
         node->state = APP_UART_CONSOLE_STATE_ERROR;
@@ -471,7 +491,7 @@ static void AppUartConsole_ProcessInput(AppUartConsoleContext *node)
 
     if (node->state == APP_UART_CONSOLE_STATE_ERROR)
         return;
-
+    // 라인 완성여부 UartService_is_complete_Line() 이게 나을라나?
     if (UartService_HasLine(&node->uart) == 0U)
         return;
 
@@ -510,7 +530,7 @@ static void AppUartConsole_ProcessLine(AppUartConsoleContext *node)
         AppUartConsole_SetResultText(node, "[error] ctrl mailbox null");
         return;
     }
-
+    // snapshot_set() 이건 별로인가? 헬퍼로 따로 빼는게 좋아보임
     snapshot.consoleState = (uint8_t)node->state;
     snapshot.uartErrorFlag = UartService_HasError(&node->uart);
     snapshot.rxLineLength = node->commandLineLength;
@@ -521,19 +541,20 @@ static void AppUartConsole_ProcessLine(AppUartConsoleContext *node)
     snapshot.resultQueueCapacity = AppCtrlResultBox_GetCapacity(node->resultBox);
 
     node->state = APP_UART_CONSOLE_STATE_PROCESSING;
-    status = AppCtrlInput_HandleLine(node->commandLineBuffer,
-                                     &snapshot,
-                                     node->commandMailbox,
-                                     &result);
+    // 명령어 분리하는 로직이 너무 강하게 묶여있음
+    // 리턴값 사실상 활용 안함
+    (void)AppCtrlInput_HandleLine(node->commandLineBuffer,
+                                  &snapshot,
+                                  node->commandMailbox,
+                                  &result);
     if (result.text[0] != '\0')
         AppUartConsole_SetResultText(node, result.text);
 
     AppUartConsole_SetValueText(node, node->commandLineBuffer);
+
     AppUartConsole_ClearLineBuffer(node);
     node->state = APP_UART_CONSOLE_STATE_IDLE;
     AppUartConsole_RequestInputRefresh(node);
-
-    (void)status;
 }
 
 static void AppUartConsole_ProcessResult(AppUartConsoleContext *node)
@@ -670,7 +691,13 @@ void AppUartConsole_RenderTask(AppUartConsoleContext *node)
 
         node->view.fullRefreshRequired = 0U;
     }
-
+    // 질문
+    // 아래 호출 되는 함수들의 경우 
+    // 함수마다 requestTx를 uart에 요청, 큐에 삽입된다
+    // 라인별로 각각 큐에 삽입중
+    // 큐가 터질 것 같은느낌?
+    // 전부다 업데이트 후에 한번 리퀘스트 진행하는 방향이 맞아보이긴하는데
+    // 일단 보류 
     if (node->view.inputDirty != 0U)
         AppUartConsole_RenderInputLine(node);
     if (node->view.taskDirty != 0U)

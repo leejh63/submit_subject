@@ -5,18 +5,10 @@
 #include "app_ctrl_command_mailbox.h"
 #include "app_ctrl_result_box.h"
 
-typedef struct
-{
-    uint32_t                    instance;
-    lpuart_state_t             *driverState;
-    const lpuart_user_config_t *userConfig;
-    AppCtrlCommandMailbox      *commandMailbox;
-    AppCtrlResultBox           *resultBox;
-    uint8_t                     nodeId;
-} AppUartConsoleConfig;
-
 status_t AppUartConsole_Init(AppUartConsoleContext *node,
-                             const AppUartConsoleConfig *config);
+                             AppCtrlCommandMailbox *commandMailbox,
+                             AppCtrlResultBox *resultBox,
+                             uint8_t nodeId);
 
 void AppUartConsole_Task(AppUartConsoleContext *node);
 void AppUartConsole_RunRxStage(AppUartConsoleContext *node);

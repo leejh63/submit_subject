@@ -7,7 +7,6 @@
 #include "can_service.h"
 #include "app_ctrl_command.h"
 #include "app_ctrl_result_box.h"
-#include "sdk_project_config.h"
 
 /*
  * CAN 앱 계층의 최상위 모듈.
@@ -16,19 +15,6 @@
  */
 
 #define CAN_APP_RESULT_QUEUE_SIZE   8U
-
-typedef struct
-{
-    uint8_t     localNodeId;            /* 현재 노드 ID */
-    uint8_t     role;                   /* CanAppRole */
-    uint8_t     defaultTargetNodeId;    /* target 미지정 시 기본 대상 */
-    uint8_t     instance;               /* FLEXCAN 인스턴스 */
-    uint8_t     txMbIndex;              /* 송신 MB */
-    uint8_t     rxMbIndex;              /* 수신 MB */
-    uint32_t    defaultTimeoutMs;       /* 명령 기본 timeout */
-    flexcan_state_t *driverState;       /* SDK 드라이버 상태 */
-    const flexcan_user_config_t *userConfig; /* SDK 설정 */
-} CanAppConfig;
 
 typedef struct
 {
@@ -54,10 +40,11 @@ typedef struct
 } CanApp;
 
 /* CanApp과 내부 CanService를 초기화한다. */
-uint8_t CanApp_Init(CanApp *app, const CanAppConfig *config);
+uint8_t CanApp_Init(CanApp *app,
+                    uint8_t localNodeId,
+                    uint8_t role,
+                    uint8_t defaultTargetNodeId);
 
-/* service 진행 + 수신 drain + AppCtrlResult 변환까지 수행하는 앱 주기 함수. */
-void    CanApp_Task(CanApp *app, uint32_t nowMs);
 
 // 아래 step API는 can_task 같은 상위 orchestration에서 선택적으로 조합하기 위한 분해형 인터페이스다.
 void    CanApp_RunService(CanApp *app, uint32_t nowMs);

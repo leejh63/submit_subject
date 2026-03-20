@@ -55,7 +55,7 @@ static void CanHw_CopySdkRxToFrame(const flexcan_msgbuff_t *rxMsg,
     CanHw_ClearFrame(outFrame);
 
     dlc = rxMsg->dataLen;
-    // 일단 임시로 데이터 크기 제한 // 주변기기에 맞춰서 변경 해야함
+    // 일단 임시로 데이터 크기 제한 // 주변상황에 맞춰서 변경 해야함
     if (dlc > CAN_FRAME_DATA_SIZE)
         dlc = CAN_FRAME_DATA_SIZE;
 // 헤더 복사
@@ -108,7 +108,7 @@ static uint8_t CanHw_ConfigAcceptAll(CanHw *hw)
         return 0U;
 
     FLEXCAN_DRV_SetRxMaskType(hw->instance, FLEXCAN_RX_MASK_INDIVIDUAL);
-    // 이게 마스크인데 넷마스킹과 동일하게 작동하는듯?
+    // 이게 마스크인데 넷마스킹과 비스무리하게 작동하는듯?
     // 모듈을 추가할때 이미 존재하는 모듈과 하드웨어 단에서 처리하도록 하는것도 좋을듯?
     status = FLEXCAN_DRV_SetRxIndividualMask(hw->instance,
                                              FLEXCAN_MSG_ID_STD,
@@ -196,9 +196,8 @@ void CanHw_Task(CanHw *hw, uint32_t nowMs)
 
     if (hw == NULL || hw->initialized == 0U)
         return;
-// 전체 수정 필요함
-// 현재는 풀링 방식으로 하나 하나 받아오기 때문에 좋은 방법이 아님
-// 인터럽트 핸들러/콜백 기반 CAN 수신 형태로 rx/tx 수신을 transport r/tx 큐에 넣는 방향으로 변경 반드시 진행해야함
+// 현재는 풀링 방식으로 하나 하나 받아오기 때문에 맘에 들진 않음
+// 인터럽트 핸들러/콜백 기반 CAN 수신 형태로 rx/tx 수신을 transport r/tx 큐에 넣는 방향으로 변경하는게 좀더 좋은것같은뎅
 // 혹은 가능하다면 dma 형태가 좋음 아마 예제코드가 dma인것 같아보였음 
 // 하지만 수신 모델 자체를 전부 뜯어 고쳐야 될수도 있음 
 // 일단은 폴링 방식으로 레이어 나눈것 과 인터럽트 형태로 변경후 코드 수정량을 보고 진행할 생각 
@@ -217,7 +216,7 @@ void CanHw_Task(CanHw *hw, uint32_t nowMs)
             hw->lastError = CAN_HW_ERROR_TX_STATUS_FAIL;
         }
     }
-    // rx의 경우 비동기적이니 항상 확인
+// RX는 외부에서 임의의 시점에 들어오므로 항상 확인
     status = FLEXCAN_DRV_GetTransferStatus(hw->instance, hw->rxMbIndex);
     if (status == STATUS_SUCCESS)
     {
@@ -234,7 +233,6 @@ void CanHw_Task(CanHw *hw, uint32_t nowMs)
             hw->lastError = CAN_HW_ERROR_RX_QUEUE_FULL;
         }
         // 다시 캔통신 수신 세팅
-        // 질문,근데 그냥 맨 아래에 세팅해도 되는거 아닌가?
         if (CanHw_StartReceive(hw) == 0U)
         {
             hw->rxErrorCount++;
@@ -245,17 +243,10 @@ void CanHw_Task(CanHw *hw, uint32_t nowMs)
     {
         hw->rxErrorCount++;
         hw->lastError = CAN_HW_ERROR_RX_STATUS_FAIL;
-
+        // 다시 캔통신 수신 세팅
         if (CanHw_StartReceive(hw) == 0U)
             hw->lastError = CAN_HW_ERROR_RX_RESTART_FAIL;
     }
-    // 질문이렇게 넣으면 안되는건가?
-    // if (CanHw_StartReceive(hw) == 0U)
-    // {
-    //     hw->rxErrorCount++;
-    //     hw->lastError = CAN_HW_ERROR_RX_RESTART_FAIL;
-    // }
-    //
 }
 
 uint8_t CanHw_StartTx(CanHw *hw, const CanFrame *frame)

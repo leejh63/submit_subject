@@ -4,6 +4,28 @@
 #include <string.h>
 #include <stdio.h>
 
+
+
+typedef struct
+{
+    uint8_t                     instance;
+    uint8_t                     txMbIndex;
+    uint8_t                     rxMbIndex;
+    uint32_t                    defaultTimeoutMs;
+    flexcan_state_t            *driverState;
+    const flexcan_user_config_t *userConfig;
+} CanAppHwConfig;
+
+static const CanAppHwConfig g_canAppHwConfig =
+{
+    INST_FLEXCAN_CONFIG_1,
+    CAN_HW_TX_MB_INDEX,
+    CAN_HW_RX_MB_INDEX,
+    300U,
+    &flexcanState0,
+    &flexcanInitConfig0
+};
+
 static void CanApp_ClearAppCtrlResult(AppCtrlResult *result)
 {
     AppCtrlResult_Clear(result);
@@ -360,25 +382,32 @@ static void CanApp_DrainRemoteCommands(CanApp *app)
         CanApp_HandleRemoteCommand(app, &commandMessage);
 }
 
-uint8_t CanApp_Init(CanApp *app, const CanAppConfig *config)
+uint8_t CanApp_Init(CanApp *app,
+                    uint8_t localNodeId,
+                    uint8_t role,
+                    uint8_t defaultTargetNodeId)
 {
     CanServiceConfig serviceConfig;
 
-    if (app == NULL || config == NULL)
+    if (app == NULL)
+        return 0U;
+
+    if ((g_canAppHwConfig.driverState == NULL) ||
+        (g_canAppHwConfig.userConfig == NULL))
         return 0U;
 
     (void)memset(app, 0, sizeof(*app));
-    app->localNodeId = config->localNodeId;
-    app->role = config->role;
-    app->defaultTargetNodeId = config->defaultTargetNodeId;
-    // 이것도 내부로 넣어야하는거 아닌가?
-    serviceConfig.localNodeId = config->localNodeId;
-    serviceConfig.instance = config->instance;
-    serviceConfig.txMbIndex = config->txMbIndex;
-    serviceConfig.rxMbIndex = config->rxMbIndex;
-    serviceConfig.defaultTimeoutMs = config->defaultTimeoutMs;
-    serviceConfig.driverState = config->driverState;
-    serviceConfig.userConfig = config->userConfig;
+    app->localNodeId = localNodeId;
+    app->role = role;
+    app->defaultTargetNodeId = defaultTargetNodeId;
+
+    serviceConfig.localNodeId = localNodeId;
+    serviceConfig.instance = g_canAppHwConfig.instance;
+    serviceConfig.txMbIndex = g_canAppHwConfig.txMbIndex;
+    serviceConfig.rxMbIndex = g_canAppHwConfig.rxMbIndex;
+    serviceConfig.defaultTimeoutMs = g_canAppHwConfig.defaultTimeoutMs;
+    serviceConfig.driverState = g_canAppHwConfig.driverState;
+    serviceConfig.userConfig = g_canAppHwConfig.userConfig;
 
     if (CanService_Init(&app->service, &serviceConfig) == 0U)
         return 0U;
@@ -427,18 +456,6 @@ void CanApp_RunTexts(CanApp *app)
     CanApp_DrainTexts(app);
 }
 
-void CanApp_Task(CanApp *app, uint32_t nowMs)
-{
-    if (app == NULL || app->initialized == 0U)
-        return;
-
-    CanApp_RunService(app, nowMs);
-    CanApp_RunRemoteCommands(app);
-    CanApp_RunServiceResults(app);
-    CanApp_RunEvents(app);
-    CanApp_RunTexts(app);
-}
-
 void CanApp_FlushTx(CanApp *app, uint32_t nowMs)
 {
     if (app == NULL || app->initialized == 0U)
@@ -461,7 +478,7 @@ uint8_t CanApp_SubmitAppCtrlCommand(CanApp *app, const AppCtrlCommand *cmd)
         app->localSubmitFailCount++;
         return 0U;
     }
-
+// 이것도 중간에 스위치문으로 헬퍼함수로 따로 빼도 문제 없을듯?
     if (cmd->type == APP_CTRL_COMMAND_TEXT)
     {
         size_t textLen;

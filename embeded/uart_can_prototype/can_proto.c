@@ -194,7 +194,8 @@ CanProtoDecodeStatus CanProto_DecodeFrame(CanProto *proto,
     uint8_t textLength;
 
     (void)nowMs;
-
+    // 중간중간 헬퍼함수로 따로 빼서 관리하게 편하게한느게 좋아보임
+    // 지금 사실상 그냥 구조도 없이 임시코드 수준으로 만들어져있음
     if (proto == NULL || frame == NULL || outMessage == NULL || proto->initialized == 0U)
         return CAN_PROTO_DECODE_INVALID;
 
@@ -211,7 +212,7 @@ CanProtoDecodeStatus CanProto_DecodeFrame(CanProto *proto,
         proto->decodeIgnoredCount++;
         return CAN_PROTO_DECODE_IGNORED;
     }
-
+    // text_decode 헬퍼함수로 빼는게 좋을듯
     if (messageType == CAN_MSG_TEXT)
     {
         if (frame->dlc < CAN_TEXT_FRAME_HEADER_SIZE)
@@ -266,6 +267,7 @@ CanProtoDecodeStatus CanProto_DecodeFrame(CanProto *proto,
         proto->decodeOkCount++;
         return CAN_PROTO_DECODE_OK;
     }
+
     // 텍스트 명령어가 아닌 다른명령어
     if (frame->dlc < 8U)
     {

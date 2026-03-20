@@ -10,8 +10,6 @@
 #include "uart_service.h"
 #include "app_ctrl_command_mailbox.h"
 #include "app_ctrl_result_box.h"
-#include "peripherals_lpuart_1.h"
-#include "sdk_project_config.h"
 #include "can_types.h"
 #include "can_app.h"
 #include "can_task.h"
@@ -90,6 +88,15 @@ static RuntimeTaskEntry g_runtimeTaskTable[] =
 #define RUNTIME_TASK_COUNT \
     ((uint32_t)(sizeof(g_runtimeTaskTable) / sizeof(g_runtimeTaskTable[0])))
 
+static void Runtime_TaskHeartbeat(void *context)
+{
+    (void)context;
+
+    g_runtimeStatus.tmp_check_heartbeat++;
+    RuntimeStatus_SetHeartbeatAlive(&g_runtimeStatus, 1U);
+    RuntimeStatus_SetTickMs(&g_runtimeStatus, RuntimeTick_GetMs());
+}
+
 static void Runtime_TaskUart(void *context)
 {
     AppUartConsoleContext *node;
@@ -100,30 +107,6 @@ static void Runtime_TaskUart(void *context)
 
     g_runtimeStatus.tmp_check_uart++;
     AppUartConsoleTask_Run(&g_runtimeAppUartConsoleTask, RuntimeTick_GetMs());
-}
-
-static void Runtime_TaskHeartbeat(void *context)
-{
-    (void)context;
-
-    g_runtimeStatus.tmp_check_heartbeat++;
-    RuntimeStatus_SetHeartbeatAlive(&g_runtimeStatus, 1U);
-    RuntimeStatus_SetTickMs(&g_runtimeStatus, RuntimeTick_GetMs());
-}
-
-static void Runtime_TaskCan(void *context)
-{
-    uint32_t nowMs;
-    uint8_t  activity;
-
-    (void)context;
-
-    nowMs = RuntimeTick_GetMs();
-    activity = CanTask_Run(&g_runtimeCanTask, nowMs);
-
-    RuntimeStatus_SetCanAlive(&g_runtimeStatus, activity);
-    if (activity != 0U)
-        g_runtimeStatus.tmp_check_can++;
 }
 
 static void Runtime_TaskRender(void *context)
@@ -159,11 +142,24 @@ static void Runtime_UpdateTaskRender(AppUartConsoleContext *node)
     AppUartConsole_SetTaskText(node, taskText);
 }
 
+static void Runtime_TaskCan(void *context)
+{
+    uint32_t nowMs;
+    uint8_t  activity;
+
+    (void)context;
+
+    nowMs = RuntimeTick_GetMs();
+    activity = CanTask_Run(&g_runtimeCanTask, nowMs);
+
+    RuntimeStatus_SetCanAlive(&g_runtimeStatus, activity);
+    if (activity != 0U)
+        g_runtimeStatus.tmp_check_can++;
+}
+
 status_t Runtime_Init(void)
 {
-    status_t       status;
-    AppUartConsoleConfig uartConfig;
-    CanAppConfig   canConfig;
+    status_t status;
 
     RuntimeStatus_Init(&g_runtimeStatus);
 
@@ -174,34 +170,24 @@ status_t Runtime_Init(void)
     g_runtimeLastTickMs = RuntimeTick_GetMs();
 
     AppCtrlCommandMailbox_Init(&g_runtimeAppCtrlCommandMailbox);
+
     AppCtrlResultBox_Init(&g_runtimeAppCtrlResultBox);
 
-    // 질문이거 AppUartConsole_Init 내부로 넣는게 좋을듯?>
-    uartConfig.instance = INST_LPUART_1;
-    uartConfig.driverState = &lpUartState1;
-    uartConfig.userConfig = &lpuart_1_InitConfig0;
-    uartConfig.commandMailbox = &g_runtimeAppCtrlCommandMailbox;
-    uartConfig.resultBox = &g_runtimeAppCtrlResultBox;
-    uartConfig.nodeId = (uint8_t)RUNTIME_NODE_ID;
-
-    status = AppUartConsole_Init(&g_runtimeUartNode, &uartConfig);
+    status = AppUartConsole_Init(&g_runtimeUartNode,
+                                 &g_runtimeAppCtrlCommandMailbox,
+                                 &g_runtimeAppCtrlResultBox,
+                                 (uint8_t)RUNTIME_NODE_ID);
     if (status != STATUS_SUCCESS)
         return status;
-    // 질문이거 CanApp_Init 내부로 넣는게 좋을듯?>
-    canConfig.localNodeId = (uint8_t)RUNTIME_NODE_ID;
-    canConfig.role = (uint8_t)RUNTIME_APP_ROLE;
-    canConfig.defaultTargetNodeId = (uint8_t)RUNTIME_DEFAULT_TARGET_ID;
-    canConfig.instance = INST_FLEXCAN_CONFIG_1;
-    canConfig.txMbIndex = CAN_HW_TX_MB_INDEX;
-    canConfig.rxMbIndex = CAN_HW_RX_MB_INDEX;
-    canConfig.defaultTimeoutMs = 300U;
-    canConfig.driverState = &flexcanState0;
-    canConfig.userConfig = &flexcanInitConfig0;
 
-    if (CanApp_Init(&g_runtimeCanApp, &canConfig) == 0U)
+    if (CanApp_Init(&g_runtimeCanApp,
+                    (uint8_t)RUNTIME_NODE_ID,
+                    (uint8_t)RUNTIME_APP_ROLE,
+                    (uint8_t)RUNTIME_DEFAULT_TARGET_ID) == 0U)
         return STATUS_ERROR;
 
     AppUartConsoleTask_Init(&g_runtimeAppUartConsoleTask, &g_runtimeUartNode);
+    
     CanTask_Init(&g_runtimeCanTask,
                  &g_runtimeCanApp,
                  &g_runtimeAppCtrlCommandMailbox,
