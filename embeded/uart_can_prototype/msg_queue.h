@@ -4,11 +4,19 @@
 #include <stdint.h>
 #include "status.h"
 
-#define MSG_QUEUE_ITEM_DATA_MAX   512U
+/*
+ * UART TX용 고정 크기 메시지 큐.
+ *
+ * 기존에는 슬롯 하나가 512바이트라서 UART UI 문자열 하나를 큐에 넣을 때
+ * 메모리 사용량과 memcpy 비용이 너무 컸다.
+ * 현재는 "작은 TX chunk" 단위로 큐를 운용한다.
+ */
+
+#define MSG_QUEUE_ITEM_DATA_MAX   128U
 
 typedef struct
 {
-    uint8_t data[MSG_QUEUE_ITEM_DATA_MAX];
+    uint8_t  data[MSG_QUEUE_ITEM_DATA_MAX];
     uint16_t length;
 } MsgQueueItem;
 
@@ -36,7 +44,6 @@ status_t MsgQueue_Pop(MsgQueue *queue,
 
 uint8_t MsgQueue_IsEmpty(const MsgQueue *queue);
 uint8_t MsgQueue_IsFull(const MsgQueue *queue);
-
 uint16_t MsgQueue_GetCount(const MsgQueue *queue);
 uint16_t MsgQueue_GetCapacity(const MsgQueue *queue);
 

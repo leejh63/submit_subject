@@ -6,7 +6,7 @@ static uint16_t UartHw_RxPending_NextIndex(uint16_t index)
 {
     index++;
 
-    if (index >= UART_RX_PENDING_SIZE)
+    if (index >= UART_SERVICE_RX_PENDING_SIZE)
         index = 0U;
 
     return index;
@@ -40,6 +40,7 @@ static void UartHw_RxPending_Push(UartPort *port, uint8_t rxByte)
     if (UartHw_RxPending_IsFull(rxPending) != 0U)
     {
         rxPending->overflow = 1U;
+        rxPending->overflowCount++;
         return;
     }
 
@@ -70,6 +71,8 @@ status_t UartHw_Init(UartPort *port,
     if (status != STATUS_SUCCESS)
     {
         port->channel.errorFlag = 1U;
+        port->channel.errorCode = UART_ERROR_HW_INIT;
+        port->channel.errorCount++;
         return status;
     }
 
@@ -81,6 +84,8 @@ status_t UartHw_Init(UartPort *port,
     if (status != STATUS_SUCCESS)
     {
         port->channel.errorFlag = 1U;
+        port->channel.errorCode = UART_ERROR_RX_DRIVER;
+        port->channel.errorCount++;
         return status;
     }
 
@@ -155,11 +160,19 @@ void UartHw_RxCallback(void *driverState,
         if (status != STATUS_SUCCESS)
         {
             port->channel.errorFlag = 1U;
+            port->channel.errorCode = UART_ERROR_RX_DRIVER;
+            port->channel.errorCount++;
         }
     }
     else if (event == UART_EVENT_ERROR)
     {
         port->channel.errorFlag = 1U;
+        port->channel.errorCode = UART_ERROR_RX_DRIVER;
+        port->channel.errorCount++;
+
+        status = UartHw_ContinueReceiveByte(port);
+        if (status != STATUS_SUCCESS)
+            port->channel.errorCount++;
     }
     else
     {

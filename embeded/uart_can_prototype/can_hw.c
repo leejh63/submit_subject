@@ -55,15 +55,16 @@ static void CanHw_CopySdkRxToFrame(const flexcan_msgbuff_t *rxMsg,
     CanHw_ClearFrame(outFrame);
 
     dlc = rxMsg->dataLen;
+    // 일단 임시로 데이터 크기 제한 // 주변기기에 맞춰서 변경 해야함
     if (dlc > CAN_FRAME_DATA_SIZE)
         dlc = CAN_FRAME_DATA_SIZE;
-
+// 헤더 복사
     outFrame->id = rxMsg->msgId;
     outFrame->dlc = dlc;
     outFrame->isExtendedId = 0U;
     outFrame->isRemoteFrame = 0U;
     outFrame->timestampMs = nowMs;
-
+// 데이터 복사
     (void)memcpy(outFrame->data, rxMsg->data, dlc);
 }
 
@@ -91,7 +92,10 @@ static uint8_t CanHw_StartReceive(CanHw *hw)
         return 0U;
 
     (void)memset(&hw->rxMsg, 0, sizeof(hw->rxMsg));
-
+    // 이걸 조절하는 걸 통해서 어떤 인덱스, 어떤 버퍼를 쓸지  결정가능 
+    // 그렇다면 큰 분류를 여기서 미리하고 
+    // 소프트웨어적으로 분류하는것도 방법일듯 
+    // 모듈이 이걸 처리하니 cpu부담도 적을듯?
     status = FLEXCAN_DRV_Receive(hw->instance, hw->rxMbIndex, &hw->rxMsg);
     return (status == STATUS_SUCCESS) ? 1U : 0U;
 }
@@ -104,10 +108,12 @@ static uint8_t CanHw_ConfigAcceptAll(CanHw *hw)
         return 0U;
 
     FLEXCAN_DRV_SetRxMaskType(hw->instance, FLEXCAN_RX_MASK_INDIVIDUAL);
+    // 이게 마스크인데 넷마스킹과 동일하게 작동하는듯?
+    // 모듈을 추가할때 이미 존재하는 모듈과 하드웨어 단에서 처리하도록 하는것도 좋을듯?
     status = FLEXCAN_DRV_SetRxIndividualMask(hw->instance,
                                              FLEXCAN_MSG_ID_STD,
                                              hw->rxMbIndex,
-                                             0x00000000U);
+                                             0x00000000U); 
     return (status == STATUS_SUCCESS) ? 1U : 0U;
 }
 
@@ -152,7 +158,7 @@ uint8_t CanHw_Init(CanHw *hw, const CanHwConfig *config)
         hw->lastError = CAN_HW_ERROR_INIT_FAIL;
         return 0U;
     }
-
+    // tx메세지 버퍼 등록
     status = FLEXCAN_DRV_ConfigTxMb(hw->instance, hw->txMbIndex, &dataInfo, 0U);
     if (status != STATUS_SUCCESS)
     {
@@ -165,7 +171,7 @@ uint8_t CanHw_Init(CanHw *hw, const CanHwConfig *config)
         hw->lastError = CAN_HW_ERROR_RX_CONFIG_FAIL;
         return 0U;
     }
-
+    // rx메세지 버퍼 등록
     status = FLEXCAN_DRV_ConfigRxMb(hw->instance, hw->rxMbIndex, &dataInfo, 0U);
     if (status != STATUS_SUCCESS)
     {
@@ -190,9 +196,14 @@ void CanHw_Task(CanHw *hw, uint32_t nowMs)
 
     if (hw == NULL || hw->initialized == 0U)
         return;
-
+// 전체 수정 필요함
+// 현재는 풀링 방식으로 하나 하나 받아오기 때문에 좋은 방법이 아님
+// 인터럽트 핸들러/콜백 기반 CAN 수신 형태로 rx/tx 수신을 transport r/tx 큐에 넣는 방향으로 변경 반드시 진행해야함
+// 혹은 가능하다면 dma 형태가 좋음 아마 예제코드가 dma인것 같아보였음 
+// 하지만 수신 모델 자체를 전부 뜯어 고쳐야 될수도 있음 
+// 일단은 폴링 방식으로 레이어 나눈것 과 인터럽트 형태로 변경후 코드 수정량을 보고 진행할 생각 
     if (hw->txBusy != 0U)
-    {
+    {   // tx가 작동 중일때  Status를 가져와서 적절한 값 세팅
         status = FLEXCAN_DRV_GetTransferStatus(hw->instance, hw->txMbIndex);
         if (status == STATUS_SUCCESS)
         {
@@ -206,12 +217,13 @@ void CanHw_Task(CanHw *hw, uint32_t nowMs)
             hw->lastError = CAN_HW_ERROR_TX_STATUS_FAIL;
         }
     }
-
+    // rx의 경우 비동기적이니 항상 확인
     status = FLEXCAN_DRV_GetTransferStatus(hw->instance, hw->rxMbIndex);
     if (status == STATUS_SUCCESS)
     {
+        // rxMsg여기에 담긴 메세지를 frame여기로 옮김
         CanHw_CopySdkRxToFrame(&hw->rxMsg, nowMs, &frame);
-
+        // 수신 큐에 프레임 담음
         if (CanHw_RxQueuePush(hw, &frame) != 0U)
         {
             hw->rxOkCount++;
@@ -221,7 +233,8 @@ void CanHw_Task(CanHw *hw, uint32_t nowMs)
             hw->rxDropCount++;
             hw->lastError = CAN_HW_ERROR_RX_QUEUE_FULL;
         }
-
+        // 다시 캔통신 수신 세팅
+        // 질문,근데 그냥 맨 아래에 세팅해도 되는거 아닌가?
         if (CanHw_StartReceive(hw) == 0U)
         {
             hw->rxErrorCount++;
@@ -236,6 +249,13 @@ void CanHw_Task(CanHw *hw, uint32_t nowMs)
         if (CanHw_StartReceive(hw) == 0U)
             hw->lastError = CAN_HW_ERROR_RX_RESTART_FAIL;
     }
+    // 질문이렇게 넣으면 안되는건가?
+    // if (CanHw_StartReceive(hw) == 0U)
+    // {
+    //     hw->rxErrorCount++;
+    //     hw->lastError = CAN_HW_ERROR_RX_RESTART_FAIL;
+    // }
+    //
 }
 
 uint8_t CanHw_StartTx(CanHw *hw, const CanFrame *frame)

@@ -1,21 +1,21 @@
 #include "runtime.h"
 
 #include <stddef.h>
-#include <stdio.h>
 
 #include "runtime_task.h"
 #include "runtime_status.h"
 #include "runtime_tick.h"
-#include "node_uart.h"
+#include "app_uart_console.h"
+#include "app_uart_console_task.h"
 #include "uart_service.h"
-#include "ctrl_mailbox.h"
-#include "ctrl_result_box.h"
-#include "ctrl_cmd.h"
+#include "app_ctrl_command_mailbox.h"
+#include "app_ctrl_result_box.h"
 #include "peripherals_lpuart_1.h"
 #include "sdk_project_config.h"
 #include "can_types.h"
 #include "can_app.h"
-
+#include "can_task.h"
+// 임시구조
 #define RUNTIME_ROLE_MASTER      1U
 #define RUNTIME_ROLE_SLAVE       2U
 #define RUNTIME_ROLE_SLAVETWO    3U
@@ -38,25 +38,22 @@
 #error Invalid RUNTIME_ROLE
 #endif
 
-#define RUNTIME_CAN_MAX_TX_PER_TICK      2U
-#define RUNTIME_CAN_MAX_RESULT_PER_TICK  4U
-
 static uint32_t          g_runtimeLastTickMs = 0U;
 
-static NodeUartContext   g_runtimeUartNode;
+static AppUartConsoleContext   g_runtimeUartNode;
 static RuntimeStatus     g_runtimeStatus;
-static CtrlMailbox       g_runtimeCtrlMailbox;
-static CtrlResultBox     g_runtimeCtrlResultBox;
+static AppCtrlCommandMailbox       g_runtimeAppCtrlCommandMailbox;
+static AppCtrlResultBox     g_runtimeAppCtrlResultBox;
 static CanApp            g_runtimeCanApp;
+static AppUartConsoleTaskContext   g_runtimeAppUartConsoleTask;
+static CanTaskContext    g_runtimeCanTask;
 
 static void Runtime_TaskUart(void *context);
 static void Runtime_TaskCan(void *context);
 static void Runtime_TaskHeartbeat(void *context);
 static void Runtime_TaskRender(void *context);
 
-static void Runtime_UpdateTaskRender(NodeUartContext *node);
-static void Runtime_PushResult(const CtrlResult *result);
-static void Runtime_PushTextResult(const char *text);
+static void Runtime_UpdateTaskRender(AppUartConsoleContext *node);
 
 static RuntimeTaskEntry g_runtimeTaskTable[] =
 {
@@ -95,14 +92,14 @@ static RuntimeTaskEntry g_runtimeTaskTable[] =
 
 static void Runtime_TaskUart(void *context)
 {
-    NodeUartContext *node;
+    AppUartConsoleContext *node;
 
-    node = (NodeUartContext *)context;
+    node = (AppUartConsoleContext *)context;
     if (node == NULL)
         return;
 
     g_runtimeStatus.tmp_check_uart++;
-    NodeUart_Task(node);
+    AppUartConsoleTask_Run(&g_runtimeAppUartConsoleTask, RuntimeTick_GetMs());
 }
 
 static void Runtime_TaskHeartbeat(void *context)
@@ -114,92 +111,36 @@ static void Runtime_TaskHeartbeat(void *context)
     RuntimeStatus_SetTickMs(&g_runtimeStatus, RuntimeTick_GetMs());
 }
 
-static void Runtime_PushResult(const CtrlResult *result)
-{
-    if (result == NULL)
-        return;
-
-    (void)CtrlResultBox_Push(&g_runtimeCtrlResultBox, result);
-}
-
-static void Runtime_PushTextResult(const char *text)
-{
-    CtrlResult result;
-
-    if (text == NULL)
-        return;
-
-    CtrlResult_Clear(&result);
-    result.type = CTRL_RESULT_OK;
-
-    (void)snprintf(result.text,
-                   sizeof(result.text),
-                   "%s",
-                   text);
-
-    Runtime_PushResult(&result);
-}
-
 static void Runtime_TaskCan(void *context)
 {
-    CtrlCmd     cmd;
-    CtrlResult  result;
-    uint8_t     handled;
-    uint8_t     popped;
-    uint32_t    nowMs;
+    uint32_t nowMs;
+    uint8_t  activity;
 
     (void)context;
 
-    RuntimeStatus_SetCanAlive(&g_runtimeStatus, 0U);
     nowMs = RuntimeTick_GetMs();
+    activity = CanTask_Run(&g_runtimeCanTask, nowMs);
 
-    CanApp_Task(&g_runtimeCanApp, nowMs);
-
-    for (handled = 0U; handled < RUNTIME_CAN_MAX_TX_PER_TICK; handled++)
-    {
-        popped = CtrlMailbox_Pop(&g_runtimeCtrlMailbox, &cmd);
-        if (popped == 0U)
-            break;
-
-        if (CanApp_SubmitCtrlCmd(&g_runtimeCanApp, &cmd) != 0U)
-        {
-            RuntimeStatus_SetCanAlive(&g_runtimeStatus, 1U);
-            g_runtimeStatus.tmp_check_can++;
-        }
-        else
-        {
-            Runtime_PushTextResult("[error] can submit failed");
-        }
-    }
-
-    CanApp_FlushTx(&g_runtimeCanApp, nowMs);
-
-    for (handled = 0U; handled < RUNTIME_CAN_MAX_RESULT_PER_TICK; handled++)
-    {
-        popped = CanApp_PopCtrlResult(&g_runtimeCanApp, &result);
-        if (popped == 0U)
-            break;
-
-        RuntimeStatus_SetCanAlive(&g_runtimeStatus, 1U);
-        Runtime_PushResult(&result);
-    }
+    RuntimeStatus_SetCanAlive(&g_runtimeStatus, activity);
+    if (activity != 0U)
+        g_runtimeStatus.tmp_check_can++;
 }
 
 static void Runtime_TaskRender(void *context)
 {
-    NodeUartContext *node;
+    AppUartConsoleContext *node;
 
-    node = (NodeUartContext *)context;
+    node = (AppUartConsoleContext *)context;
     if (node == NULL)
         return;
 
     Runtime_UpdateTaskRender(node);
-    NodeUart_RenderTask(node);
+    AppUartConsoleTask_Render(&g_runtimeAppUartConsoleTask);
 }
 
-static void Runtime_UpdateTaskRender(NodeUartContext *node)
+static void Runtime_UpdateTaskRender(AppUartConsoleContext *node)
 {
-    char taskText[NODE_UART_TASK_VIEW_SIZE];
+    char taskText[APP_UART_CONSOLE_TASK_VIEW_SIZE];
 
     if (node == NULL)
         return;
@@ -215,13 +156,13 @@ static void Runtime_UpdateTaskRender(NodeUartContext *node)
                                 taskText,
                                 (uint16_t)sizeof(taskText));
 
-    NodeUart_SetTaskText(node, taskText);
+    AppUartConsole_SetTaskText(node, taskText);
 }
 
 status_t Runtime_Init(void)
 {
     status_t       status;
-    NodeUartConfig uartConfig;
+    AppUartConsoleConfig uartConfig;
     CanAppConfig   canConfig;
 
     RuntimeStatus_Init(&g_runtimeStatus);
@@ -232,20 +173,21 @@ status_t Runtime_Init(void)
 
     g_runtimeLastTickMs = RuntimeTick_GetMs();
 
-    CtrlMailbox_Init(&g_runtimeCtrlMailbox);
-    CtrlResultBox_Init(&g_runtimeCtrlResultBox);
+    AppCtrlCommandMailbox_Init(&g_runtimeAppCtrlCommandMailbox);
+    AppCtrlResultBox_Init(&g_runtimeAppCtrlResultBox);
 
+    // 질문이거 AppUartConsole_Init 내부로 넣는게 좋을듯?>
     uartConfig.instance = INST_LPUART_1;
     uartConfig.driverState = &lpUartState1;
     uartConfig.userConfig = &lpuart_1_InitConfig0;
-    uartConfig.ctrlMailbox = &g_runtimeCtrlMailbox;
-    uartConfig.ctrlResultBox = &g_runtimeCtrlResultBox;
+    uartConfig.commandMailbox = &g_runtimeAppCtrlCommandMailbox;
+    uartConfig.resultBox = &g_runtimeAppCtrlResultBox;
     uartConfig.nodeId = (uint8_t)RUNTIME_NODE_ID;
 
-    status = NodeUart_Init(&g_runtimeUartNode, &uartConfig);
+    status = AppUartConsole_Init(&g_runtimeUartNode, &uartConfig);
     if (status != STATUS_SUCCESS)
         return status;
-
+    // 질문이거 CanApp_Init 내부로 넣는게 좋을듯?>
     canConfig.localNodeId = (uint8_t)RUNTIME_NODE_ID;
     canConfig.role = (uint8_t)RUNTIME_APP_ROLE;
     canConfig.defaultTargetNodeId = (uint8_t)RUNTIME_DEFAULT_TARGET_ID;
@@ -258,6 +200,12 @@ status_t Runtime_Init(void)
 
     if (CanApp_Init(&g_runtimeCanApp, &canConfig) == 0U)
         return STATUS_ERROR;
+
+    AppUartConsoleTask_Init(&g_runtimeAppUartConsoleTask, &g_runtimeUartNode);
+    CanTask_Init(&g_runtimeCanTask,
+                 &g_runtimeCanApp,
+                 &g_runtimeAppCtrlCommandMailbox,
+                 &g_runtimeAppCtrlResultBox);
 
     Runtime_UpdateTaskRender(&g_runtimeUartNode);
 

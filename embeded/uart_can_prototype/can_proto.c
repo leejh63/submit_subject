@@ -266,7 +266,7 @@ CanProtoDecodeStatus CanProto_DecodeFrame(CanProto *proto,
         proto->decodeOkCount++;
         return CAN_PROTO_DECODE_OK;
     }
-
+    // 텍스트 명령어가 아닌 다른명령어
     if (frame->dlc < 8U)
     {
         proto->decodeInvalidCount++;

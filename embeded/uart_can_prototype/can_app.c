@@ -4,9 +4,9 @@
 #include <string.h>
 #include <stdio.h>
 
-static void CanApp_ClearCtrlResult(CtrlResult *result)
+static void CanApp_ClearAppCtrlResult(AppCtrlResult *result)
 {
-    CtrlResult_Clear(result);
+    AppCtrlResult_Clear(result);
 }
 
 static uint8_t CanApp_ResultNext(uint8_t index)
@@ -25,7 +25,7 @@ static uint8_t CanApp_ResultQueueIsFull(const CanApp *app)
     return (app->resultCount >= CAN_APP_RESULT_QUEUE_SIZE) ? 1U : 0U;
 }
 
-static uint8_t CanApp_ResultQueuePush(CanApp *app, const CtrlResult *result)
+static uint8_t CanApp_ResultQueuePush(CanApp *app, const AppCtrlResult *result)
 {
     if (app == NULL || result == NULL)
         return 0U;
@@ -42,7 +42,7 @@ static uint8_t CanApp_ResultQueuePush(CanApp *app, const CtrlResult *result)
     return 1U;
 }
 
-static uint8_t CanApp_ResultQueuePop(CanApp *app, CtrlResult *outResult)
+static uint8_t CanApp_ResultQueuePop(CanApp *app, AppCtrlResult *outResult)
 {
     if (app == NULL || outResult == NULL)
         return 0U;
@@ -51,7 +51,7 @@ static uint8_t CanApp_ResultQueuePop(CanApp *app, CtrlResult *outResult)
         return 0U;
 
     *outResult = app->resultQueue[app->resultHead];
-    CanApp_ClearCtrlResult(&app->resultQueue[app->resultHead]);
+    CanApp_ClearAppCtrlResult(&app->resultQueue[app->resultHead]);
     app->resultHead = CanApp_ResultNext(app->resultHead);
     app->resultCount--;
     return 1U;
@@ -74,14 +74,14 @@ static const char *CanApp_CommandName(uint8_t commandCode)
     }
 }
 
-static void CanApp_SetLocalTextResult(CanApp *app, CtrlResultType type, const char *text)
+static void CanApp_SetLocalTextResult(CanApp *app, AppCtrlResultType type, const char *text)
 {
-    CtrlResult result;
+    AppCtrlResult result;
 
     if (app == NULL)
         return;
 
-    CtrlResult_Clear(&result);
+    AppCtrlResult_Clear(&result);
     result.type = type;
     (void)snprintf(result.text, sizeof(result.text), "%s", (text != NULL) ? text : "");
     (void)CanApp_ResultQueuePush(app, &result);
@@ -99,18 +99,18 @@ static uint8_t CanApp_IsValidNodeId(uint8_t nodeId)
 }
 
 static uint8_t CanApp_ResolveTargetNodeId(const CanApp *app,
-                                          const CtrlCmd *cmd,
+                                          const AppCtrlCommand *cmd,
                                           uint8_t *outTargetNodeId)
 {
     if (app == NULL || cmd == NULL || outTargetNodeId == NULL)
         return 0U;
 
-    if (cmd->hasTargetId != 0U)
+    if (cmd->target.hasValue != 0U)
     {
-        if (CanApp_IsValidNodeId(cmd->targetId) == 0U)
+        if (CanApp_IsValidNodeId(cmd->target.nodeId) == 0U)
             return 0U;
 
-        *outTargetNodeId = cmd->targetId;
+        *outTargetNodeId = cmd->target.nodeId;
         return 1U;
     }
 
@@ -121,23 +121,23 @@ static uint8_t CanApp_ResolveTargetNodeId(const CanApp *app,
     return 1U;
 }
 
-static uint8_t CanApp_MapCtrlCmdToCanCommand(const CtrlCmd *cmd, uint8_t *outCommandCode)
+static uint8_t CanApp_MapAppCtrlCommandToCanCommand(const AppCtrlCommand *cmd, uint8_t *outCommandCode)
 {
     if (cmd == NULL || outCommandCode == NULL)
         return 0U;
 
     switch (cmd->type)
     {
-        case CTRL_CMD_OPEN:
+        case APP_CTRL_COMMAND_OPEN:
             *outCommandCode = CAN_CMD_OPEN;
             return 1U;
-        case CTRL_CMD_CLOSE:
+        case APP_CTRL_COMMAND_CLOSE:
             *outCommandCode = CAN_CMD_CLOSE;
             return 1U;
-        case CTRL_CMD_OFF:
+        case APP_CTRL_COMMAND_OFF:
             *outCommandCode = CAN_CMD_OFF;
             return 1U;
-        case CTRL_CMD_TEST:
+        case APP_CTRL_COMMAND_TEST:
             *outCommandCode = CAN_CMD_TEST;
             return 1U;
         default:
@@ -145,30 +145,30 @@ static uint8_t CanApp_MapCtrlCmdToCanCommand(const CtrlCmd *cmd, uint8_t *outCom
     }
 }
 
-static CtrlResultType CanApp_MapServiceResultType(uint8_t resultCode)
+static AppCtrlResultType CanApp_MapServiceResultType(uint8_t resultCode)
 {
     switch (resultCode)
     {
         case CAN_RES_OK:
-            return CTRL_RESULT_OK;
+            return APP_CTRL_RESULT_OK;
         case CAN_RES_TIMEOUT:
-            return CTRL_RESULT_TIMEOUT;
+            return APP_CTRL_RESULT_TIMEOUT;
         case CAN_RES_INVALID_TARGET:
-            return CTRL_RESULT_INVALID_TARGET;
+            return APP_CTRL_RESULT_INVALID_TARGET;
         default:
-            return CTRL_RESULT_ERROR;
+            return APP_CTRL_RESULT_ERROR;
     }
 }
 
 static void CanApp_ConvertServiceResult(const CanServiceResult *serviceResult,
-                                        CtrlResult *outResult)
+                                        AppCtrlResult *outResult)
 {
     const char *commandName;
 
     if (serviceResult == NULL || outResult == NULL)
         return;
 
-    CtrlResult_Clear(outResult);
+    AppCtrlResult_Clear(outResult);
     outResult->type = CanApp_MapServiceResultType(serviceResult->resultCode);
     outResult->hasTargetId = 1U;
     outResult->targetId = serviceResult->sourceNodeId;
@@ -218,13 +218,13 @@ static void CanApp_ConvertServiceResult(const CanServiceResult *serviceResult,
     }
 }
 
-static void CanApp_ConvertEvent(const CanMessage *message, CtrlResult *outResult)
+static void CanApp_ConvertEvent(const CanMessage *message, AppCtrlResult *outResult)
 {
     if (message == NULL || outResult == NULL)
         return;
 
-    CtrlResult_Clear(outResult);
-    outResult->type = CTRL_RESULT_OK;
+    AppCtrlResult_Clear(outResult);
+    outResult->type = APP_CTRL_RESULT_OK;
     outResult->hasTargetId = 1U;
     outResult->targetId = message->sourceNodeId;
 
@@ -237,13 +237,13 @@ static void CanApp_ConvertEvent(const CanMessage *message, CtrlResult *outResult
                    (unsigned int)message->payload[2]);
 }
 
-static void CanApp_ConvertText(const CanMessage *message, CtrlResult *outResult)
+static void CanApp_ConvertText(const CanMessage *message, AppCtrlResult *outResult)
 {
     if (message == NULL || outResult == NULL)
         return;
 
-    CtrlResult_Clear(outResult);
-    outResult->type = CTRL_RESULT_OK;
+    AppCtrlResult_Clear(outResult);
+    outResult->type = APP_CTRL_RESULT_OK;
     outResult->hasTargetId = 1U;
     outResult->targetId = message->sourceNodeId;
 
@@ -258,7 +258,7 @@ static void CanApp_HandleRemoteCommand(CanApp *app, const CanMessage *message)
 {
     uint8_t commandCode;
     uint8_t resultCode;
-    char text[CTRL_RESULT_TEXT_SIZE];
+    char text[APP_CTRL_RESULT_TEXT_SIZE];
 
     if (app == NULL || message == NULL)
         return;
@@ -288,7 +288,7 @@ static void CanApp_HandleRemoteCommand(CanApp *app, const CanMessage *message)
             break;
     }
 
-    CanApp_SetLocalTextResult(app, CTRL_RESULT_OK, text);
+    CanApp_SetLocalTextResult(app, APP_CTRL_RESULT_OK, text);
     app->remoteCommandCount++;
 
     if ((message->flags & CAN_MSG_FLAG_NEED_RESPONSE) != 0U && message->requestId != 0U)
@@ -304,7 +304,7 @@ static void CanApp_HandleRemoteCommand(CanApp *app, const CanMessage *message)
 static void CanApp_DrainServiceResults(CanApp *app)
 {
     CanServiceResult serviceResult;
-    CtrlResult ctrlResult;
+    AppCtrlResult ctrlResult;
 
     if (app == NULL)
         return;
@@ -320,7 +320,7 @@ static void CanApp_DrainServiceResults(CanApp *app)
 static void CanApp_DrainEvents(CanApp *app)
 {
     CanMessage eventMessage;
-    CtrlResult ctrlResult;
+    AppCtrlResult ctrlResult;
 
     if (app == NULL)
         return;
@@ -336,7 +336,7 @@ static void CanApp_DrainEvents(CanApp *app)
 static void CanApp_DrainTexts(CanApp *app)
 {
     CanMessage textMessage;
-    CtrlResult ctrlResult;
+    AppCtrlResult ctrlResult;
 
     if (app == NULL)
         return;
@@ -371,7 +371,7 @@ uint8_t CanApp_Init(CanApp *app, const CanAppConfig *config)
     app->localNodeId = config->localNodeId;
     app->role = config->role;
     app->defaultTargetNodeId = config->defaultTargetNodeId;
-
+    // 이것도 내부로 넣어야하는거 아닌가?
     serviceConfig.localNodeId = config->localNodeId;
     serviceConfig.instance = config->instance;
     serviceConfig.txMbIndex = config->txMbIndex;
@@ -387,16 +387,56 @@ uint8_t CanApp_Init(CanApp *app, const CanAppConfig *config)
     return 1U;
 }
 
-void CanApp_Task(CanApp *app, uint32_t nowMs)
+void CanApp_RunService(CanApp *app, uint32_t nowMs)
 {
     if (app == NULL || app->initialized == 0U)
         return;
 
     CanService_Task(&app->service, nowMs);
+}
+
+void CanApp_RunRemoteCommands(CanApp *app)
+{
+    if (app == NULL || app->initialized == 0U)
+        return;
+
     CanApp_DrainRemoteCommands(app);
+}
+
+void CanApp_RunServiceResults(CanApp *app)
+{
+    if (app == NULL || app->initialized == 0U)
+        return;
+
     CanApp_DrainServiceResults(app);
+}
+
+void CanApp_RunEvents(CanApp *app)
+{
+    if (app == NULL || app->initialized == 0U)
+        return;
+
     CanApp_DrainEvents(app);
+}
+
+void CanApp_RunTexts(CanApp *app)
+{
+    if (app == NULL || app->initialized == 0U)
+        return;
+
     CanApp_DrainTexts(app);
+}
+
+void CanApp_Task(CanApp *app, uint32_t nowMs)
+{
+    if (app == NULL || app->initialized == 0U)
+        return;
+
+    CanApp_RunService(app, nowMs);
+    CanApp_RunRemoteCommands(app);
+    CanApp_RunServiceResults(app);
+    CanApp_RunEvents(app);
+    CanApp_RunTexts(app);
 }
 
 void CanApp_FlushTx(CanApp *app, uint32_t nowMs)
@@ -407,7 +447,7 @@ void CanApp_FlushTx(CanApp *app, uint32_t nowMs)
     CanService_FlushTx(&app->service, nowMs);
 }
 
-uint8_t CanApp_SubmitCtrlCmd(CanApp *app, const CtrlCmd *cmd)
+uint8_t CanApp_SubmitAppCtrlCommand(CanApp *app, const AppCtrlCommand *cmd)
 {
     uint8_t targetNodeId;
     uint8_t commandCode;
@@ -417,39 +457,41 @@ uint8_t CanApp_SubmitCtrlCmd(CanApp *app, const CtrlCmd *cmd)
 
     if (CanApp_ResolveTargetNodeId(app, cmd, &targetNodeId) == 0U)
     {
-        CanApp_SetLocalTextResult(app, CTRL_RESULT_INVALID_TARGET, "[error] invalid target");
+        CanApp_SetLocalTextResult(app, APP_CTRL_RESULT_INVALID_TARGET, "[error] invalid target");
         app->localSubmitFailCount++;
         return 0U;
     }
 
-    if (cmd->type == CTRL_CMD_TEXT)
+    if (cmd->type == APP_CTRL_COMMAND_TEXT)
     {
         size_t textLen;
+        const char *textValue;
 
-        if (cmd->hasText == 0U)
+        textValue = cmd->payload.textArgs.text;
+        if (textValue[0] == '\0')
         {
-            CanApp_SetLocalTextResult(app, CTRL_RESULT_ERROR, "[error] empty text");
+            CanApp_SetLocalTextResult(app, APP_CTRL_RESULT_ERROR, "[error] empty text");
             app->localSubmitFailCount++;
             return 0U;
         }
 
-        textLen = strlen(cmd->text);
+        textLen = strlen(textValue);
         if (textLen > CAN_TEXT_MAX_LEN)
         {
-            char text[CTRL_RESULT_TEXT_SIZE];
+            char text[APP_CTRL_RESULT_TEXT_SIZE];
 
             (void)snprintf(text,
                            sizeof(text),
                            "[error] text too long max=%u",
                            (unsigned int)CAN_TEXT_MAX_LEN);
-            CanApp_SetLocalTextResult(app, CTRL_RESULT_ERROR, text);
+            CanApp_SetLocalTextResult(app, APP_CTRL_RESULT_ERROR, text);
             app->localSubmitFailCount++;
             return 0U;
         }
 
-        if (CanService_SendText(&app->service, targetNodeId, CAN_TEXT_USER, cmd->text) == 0U)
+        if (CanService_SendText(&app->service, targetNodeId, CAN_TEXT_USER, textValue) == 0U)
         {
-            CanApp_SetLocalTextResult(app, CTRL_RESULT_ERROR, "[error] can text send failed");
+            CanApp_SetLocalTextResult(app, APP_CTRL_RESULT_ERROR, "[error] can text send failed");
             app->localSubmitFailCount++;
             return 0U;
         }
@@ -458,9 +500,26 @@ uint8_t CanApp_SubmitCtrlCmd(CanApp *app, const CtrlCmd *cmd)
         return 1U;
     }
 
-    if (CanApp_MapCtrlCmdToCanCommand(cmd, &commandCode) == 0U)
+    if (cmd->type == APP_CTRL_COMMAND_EVENT)
     {
-        CanApp_SetLocalTextResult(app, CTRL_RESULT_ERROR, "[error] unsupported ctrl cmd");
+        if (CanService_SendEvent(&app->service,
+                                 targetNodeId,
+                                 cmd->payload.eventArgs.eventCode,
+                                 cmd->payload.eventArgs.arg0,
+                                 cmd->payload.eventArgs.arg1) == 0U)
+        {
+            CanApp_SetLocalTextResult(app, APP_CTRL_RESULT_ERROR, "[error] can event send failed");
+            app->localSubmitFailCount++;
+            return 0U;
+        }
+
+        app->localSubmitOkCount++;
+        return 1U;
+    }
+
+    if (CanApp_MapAppCtrlCommandToCanCommand(cmd, &commandCode) == 0U)
+    {
+        CanApp_SetLocalTextResult(app, APP_CTRL_RESULT_ERROR, "[error] unsupported ctrl cmd");
         app->localSubmitFailCount++;
         return 0U;
     }
@@ -472,7 +531,7 @@ uint8_t CanApp_SubmitCtrlCmd(CanApp *app, const CtrlCmd *cmd)
                                0U,
                                1U) == 0U)
     {
-        CanApp_SetLocalTextResult(app, CTRL_RESULT_ERROR, "[error] can send failed");
+        CanApp_SetLocalTextResult(app, APP_CTRL_RESULT_ERROR, "[error] can send failed");
         app->localSubmitFailCount++;
         return 0U;
     }
@@ -481,7 +540,7 @@ uint8_t CanApp_SubmitCtrlCmd(CanApp *app, const CtrlCmd *cmd)
     return 1U;
 }
 
-uint8_t CanApp_PopCtrlResult(CanApp *app, CtrlResult *outResult)
+uint8_t CanApp_PopAppCtrlResult(CanApp *app, AppCtrlResult *outResult)
 {
     return CanApp_ResultQueuePop(app, outResult);
 }

@@ -472,7 +472,7 @@ uint8_t CanService_Init(CanService *service, const CanServiceConfig *config)
         service->lastError = CAN_SERVICE_ERROR_PROTOCOL_ERROR;
         return 0U;
     }
-
+    // 이것도..
     transportConfig.localNodeId = config->localNodeId;
     transportConfig.instance = config->instance;
     transportConfig.txMbIndex = config->txMbIndex;
@@ -495,7 +495,7 @@ void CanService_Task(CanService *service, uint32_t nowMs)
         return;
 
     service->currentTickMs = nowMs;
-
+    // 추후 작업이 필요할 수도 있으니 일단 인터페이스는 맞춰 둠
     CanProto_Task(&service->proto, nowMs);
     CanTransport_Task(&service->transport, nowMs);
     CanService_ProcessRx(service);

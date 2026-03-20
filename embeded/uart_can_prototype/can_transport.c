@@ -55,6 +55,37 @@ static uint8_t CanTransport_TxPeek(const CanTransport *transport, CanFrame *outF
     return 1U;
 }
 
+static void CanTransport_TxDropFront(CanTransport *transport);
+
+static void CanTransport_OnTxComplete(CanTransport *transport)
+{
+    if (transport == NULL)
+        return;
+
+    if (transport->hw.txOkCount != transport->hwTxOkCountSeen)
+    {
+        transport->hwTxOkCountSeen = transport->hw.txOkCount;
+        transport->txInFlight = 0U;
+        CanTransport_TxDropFront(transport);
+        CanTransport_ClearFrame(&transport->currentTxFrame);
+        return;
+    }
+
+    if (transport->hw.txErrorCount != transport->hwTxErrorCountSeen)
+    {
+        transport->hwTxErrorCountSeen = transport->hw.txErrorCount;
+        transport->txInFlight = 0U;
+        transport->txRetryCount++;
+        transport->lastError = CAN_TRANSPORT_ERROR_HW_TX_FAIL;
+        CanTransport_ClearFrame(&transport->currentTxFrame);
+        return;
+    }
+
+    transport->txInFlight = 0U;
+    transport->lastError = CAN_TRANSPORT_ERROR_HW_TX_FAIL;
+    CanTransport_ClearFrame(&transport->currentTxFrame);
+}
+
 static void CanTransport_TxDropFront(CanTransport *transport)
 {
     if (transport == NULL || transport->txCount == 0U)
@@ -109,10 +140,10 @@ static void CanTransport_ProcessTx(CanTransport *transport)
 
     if (transport->txInFlight != 0U)
     {
-        if (CanHw_IsTxBusy(&transport->hw) == 0U)
-            transport->txInFlight = 0U;
-        else
+        if (CanHw_IsTxBusy(&transport->hw) != 0U)
             return;
+
+        CanTransport_OnTxComplete(transport);
     }
 
     if (transport->txCount == 0U)
@@ -129,9 +160,10 @@ static void CanTransport_ProcessTx(CanTransport *transport)
     }
 
     transport->currentTxFrame = frame;
+    transport->hwTxOkCountSeen = transport->hw.txOkCount;
+    transport->hwTxErrorCountSeen = transport->hw.txErrorCount;
     transport->txInFlight = 1U;
     transport->txStartCount++;
-    CanTransport_TxDropFront(transport);
 }
 
 uint8_t CanTransport_Init(CanTransport *transport,
