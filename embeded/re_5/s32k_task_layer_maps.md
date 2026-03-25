@@ -9,7 +9,7 @@
 - 가장 왼쪽은 `Runtime Layer`의 태스크 진입점이다.
 - 가운데는 실제 정책이 들어 있는 `App Layer`와 `Service Layer`다.
 - 오른쪽으로 갈수록 `Driver -> Platform` 순으로 내려간다.
-- `re_5`에서는 CAN RX가 polling 완료 확인이 아니라 `FlexCAN callback` 기반이므로, CAN 쪽에는 점선 callback 경로를 같이 표시했다.
+- `re_5`에서는 CAN RX 완료와 TX 성공 완료가 `FlexCAN callback` 보조 경로를 사용하므로, CAN 쪽에는 점선 callback 경로를 같이 표시했다.
 
 함수 단위 상세 흐름은 [s32k_project_function_variable_outline.md](./s32k_project_function_variable_outline.md)를 보면 된다.
 
@@ -43,14 +43,14 @@ flowchart LR
   SVC1["Service Layer<br/>services/can_module.c<br/>CanModule_Task<br/>CanModule_SubmitPending<br/>CanModule_TryPopIncoming / TryPopResult"]
   SVC2["Service Layer<br/>services/can_service.c<br/>CanService_Task / ProcessRx / Send*"]
   SVC3["Service Layer<br/>services/can_proto.c<br/>CanProto_EncodeMessage / DecodeFrame"]
-  DRV["Driver Layer<br/>drivers/can_hw.c<br/>CanHw_Task / OnIsoSdkEvent / OnRxComplete / StartTx / TryPopRx"]
+  DRV["Driver Layer<br/>drivers/can_hw.c<br/>CanHw_Task / OnIsoSdkEvent / OnRxComplete / OnTxComplete / StartTx / TryPopRx"]
   PLT["Platform Layer<br/>platform/s32k_sdk/isosdk_can.c<br/>IsoSdk_CanInstallEventCallback<br/>IsoSdk_CanSend / ReadRxFrame / GetTransferState"]
 
   RT --> APP --> SVC1 --> SVC2 --> SVC3
   SVC2 --> DRV --> PLT
   APP --> APP2
   APP2 --> SVC1
-  PLT -. FlexCAN callback .-> DRV
+  PLT -. FlexCAN RX/TX callback .-> DRV
 ```
 
 ### led task
@@ -80,12 +80,14 @@ flowchart LR
 ```mermaid
 flowchart LR
   PLT["Platform Layer<br/>platform/s32k_sdk/isosdk_can.c<br/>IsoSdk_CanSdkEventCallback / DispatchEvent"]
-  DRV["Driver Layer<br/>drivers/can_hw.c<br/>CanHw_OnIsoSdkEvent / CanHw_OnRxComplete"]
-  SVC["Service Layer<br/>services/can_service.c<br/>CanTransport_DrainHwRx"]
+  DRV["Driver Layer<br/>drivers/can_hw.c<br/>CanHw_OnIsoSdkEvent / CanHw_OnRxComplete / CanHw_OnTxComplete"]
+  SVC["Service Layer<br/>services/can_service.c<br/>CanTransport_DrainHwRx / CanTransport_ProcessTx"]
   APP["App Layer<br/>app/app_core.c<br/>AppCore_HandleCanIncoming"]
 
   PLT -. RX done callback .-> DRV
   DRV -. enqueue rx frame .-> SVC
+  PLT -. TX done callback .-> DRV
+  DRV -. update tx status .-> SVC
   SVC --> APP
 ```
 
@@ -119,7 +121,7 @@ flowchart LR
   SVC1["Service Layer<br/>services/can_module.c<br/>CanModule_Task / Queue* / TryPop*"]
   SVC2["Service Layer<br/>services/can_service.c<br/>CanService_Task / ProcessRx / Send*"]
   SVC3["Service Layer<br/>services/can_proto.c<br/>CanProto_EncodeMessage / DecodeFrame"]
-  DRV["Driver Layer<br/>drivers/can_hw.c<br/>CanHw_Task / OnIsoSdkEvent / OnRxComplete / StartTx / TryPopRx"]
+  DRV["Driver Layer<br/>drivers/can_hw.c<br/>CanHw_Task / OnIsoSdkEvent / OnRxComplete / OnTxComplete / StartTx / TryPopRx"]
   PLT["Platform Layer<br/>platform/s32k_sdk/isosdk_can.c<br/>IsoSdk_CanInstallEventCallback<br/>IsoSdk_CanSend / ReadRxFrame / GetTransferState"]
 
   RT --> APP1
@@ -127,7 +129,7 @@ flowchart LR
   APP1 --> APP3
   APP1 --> SVC1 --> SVC2 --> SVC3
   SVC2 --> DRV --> PLT
-  PLT -. FlexCAN callback .-> DRV
+  PLT -. FlexCAN RX/TX callback .-> DRV
 ```
 
 ### lin_fast task
@@ -206,12 +208,14 @@ flowchart LR
 ```mermaid
 flowchart LR
   PLT["Platform Layer<br/>platform/s32k_sdk/isosdk_can.c<br/>IsoSdk_CanSdkEventCallback / DispatchEvent"]
-  DRV["Driver Layer<br/>drivers/can_hw.c<br/>CanHw_OnIsoSdkEvent / CanHw_OnRxComplete"]
-  SVC["Service Layer<br/>services/can_service.c<br/>CanTransport_DrainHwRx / ProcessRx"]
+  DRV["Driver Layer<br/>drivers/can_hw.c<br/>CanHw_OnIsoSdkEvent / CanHw_OnRxComplete / CanHw_OnTxComplete"]
+  SVC["Service Layer<br/>services/can_service.c<br/>CanTransport_DrainHwRx / CanTransport_ProcessTx / ProcessRx"]
   APP["App Layer<br/>app/app_core.c<br/>AppCore_HandleCanIncoming / AppMaster_HandleCanCommand"]
 
   PLT -. RX done callback .-> DRV
   DRV -. enqueue rx frame .-> SVC
+  PLT -. TX done callback .-> DRV
+  DRV -. update tx status .-> SVC
   SVC --> APP
 ```
 
@@ -296,7 +300,7 @@ flowchart LR
 
 - `S32K_Can_slave`
   - 버튼과 CAN 명령을 받아 LED와 CAN 응답으로 반응한다.
-  - `re_5`에서는 CAN RX 완료가 callback으로 `drivers/can_hw.c`에 먼저 들어온다.
+  - `re_5`에서는 CAN RX 완료와 TX 성공 완료가 callback으로 `drivers/can_hw.c`에 먼저 반영된다.
 
 - `S32K_LinCan_master`
   - UART console, CAN, LIN을 모두 엮는 orchestration 중심 노드다.

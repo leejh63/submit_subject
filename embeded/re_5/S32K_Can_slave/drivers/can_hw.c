@@ -122,6 +122,17 @@ static void CanHw_OnRxComplete(CanHw *hw)
     }
 }
 
+static void CanHw_OnTxComplete(CanHw *hw)
+{
+    if ((hw == NULL) || (hw->initialized == 0U))
+    {
+        return;
+    }
+
+    hw->tx_busy = 0U;
+    hw->tx_ok_count++;
+}
+
 static void CanHw_OnIsoSdkEvent(void *context, uint8_t event_id, uint8_t mb_index)
 {
     CanHw *hw;
@@ -135,6 +146,12 @@ static void CanHw_OnIsoSdkEvent(void *context, uint8_t event_id, uint8_t mb_inde
     if ((event_id == ISOSDK_CAN_EVENT_RX_DONE) && (mb_index == hw->rx_mb_index))
     {
         CanHw_OnRxComplete(hw);
+        return;
+    }
+
+    if ((event_id == ISOSDK_CAN_EVENT_TX_DONE) && (mb_index == hw->tx_mb_index))
+    {
+        CanHw_OnTxComplete(hw);
         return;
     }
 
@@ -216,12 +233,7 @@ void CanHw_Task(CanHw *hw, uint32_t now_ms)
     if (hw->tx_busy != 0U)
     {
         transfer_state = IsoSdk_CanGetTransferState(hw->instance, hw->tx_mb_index);
-        if (transfer_state == ISOSDK_CAN_TRANSFER_DONE)
-        {
-            hw->tx_busy = 0U;
-            hw->tx_ok_count++;
-        }
-        else if (transfer_state == ISOSDK_CAN_TRANSFER_ERROR)
+        if (transfer_state == ISOSDK_CAN_TRANSFER_ERROR)
         {
             hw->tx_busy = 0U;
             hw->tx_error_count++;

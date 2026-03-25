@@ -10,9 +10,10 @@
 - `-`: 함수 안에서 바뀌는 상태, 핵심 메모, 중요한 변수
 
 주의:
-- `re_5` 기준 CAN RX는 `re_4` 문서처럼 task polling으로 완료를 읽는 방식이 아니라, `FLEXCAN` event callback 기반이다.
+- `re_5` 기준 CAN RX 완료와 TX 성공 완료는 `re_4` 문서처럼 task polling으로 마무리하지 않고, `FLEXCAN` event callback 기반이다.
 - 즉 `CanHw_Task()`는 RX 완료 프레임을 직접 읽어 queue에 넣지 않고, interrupt callback이 먼저 `hw->rx_queue`에 적재한다.
-- TX 완료 확인과 RX error recovery는 여전히 task 쪽에서 상태를 본다.
+- TX 성공 완료도 interrupt callback이 `tx_busy`, `tx_ok_count`를 먼저 갱신한다.
+- `CanHw_Task()`는 TX transfer error fallback과 RX error recovery를 확인하는 쪽으로 역할이 줄었다.
 
 ## 1. S32K_Can_slave
 
@@ -53,6 +54,10 @@ CAN callback (FlexCAN interrupt)
                     > CanHw_StartReceive
                         > IsoSdk_CanStartReceive
                             > FLEXCAN_DRV_Receive
+            - event == TX_DONE && mb_index == tx_mb_index 이면
+                > CanHw_OnTxComplete
+                    - tx_busy = 0
+                    - tx_ok_count++
 
 > IsoSdk_CanSdkErrorCallback
     > IsoSdk_CanDispatchEvent
@@ -190,7 +195,8 @@ main
                             > CanService_Task
                                 > CanTransport_Task
                                     > CanHw_Task
-                                        - TX 완료/에러 상태 확인
+                                        - TX 성공 완료는 interrupt callback이 이미 수행
+                                        - TX transfer error fallback만 확인
                                             > IsoSdk_CanGetTransferState
                                         - RX 완료 frame 적재는 interrupt callback이 이미 수행
                                         - RX transfer error 복구만 확인
@@ -528,6 +534,10 @@ CAN callback (FlexCAN interrupt)
                     > CanHw_StartReceive
                         > IsoSdk_CanStartReceive
                             > FLEXCAN_DRV_Receive
+            - event == TX_DONE && mb_index == tx_mb_index 이면
+                > CanHw_OnTxComplete
+                    - tx_busy = 0
+                    - tx_ok_count++
 
 > IsoSdk_CanSdkErrorCallback
     > IsoSdk_CanDispatchEvent
@@ -707,9 +717,13 @@ main
                             > CanService_Task
                                 > CanTransport_Task
                                     > CanHw_Task
-                                        - TX 완료/에러 상태 확인
+                                        - TX 성공 완료는 interrupt callback이 이미 수행
+                                        - TX transfer error fallback만 확인
+                                            > IsoSdk_CanGetTransferState
                                         - RX 완료 frame 적재는 interrupt callback이 이미 수행
                                         - RX transfer error 복구만 확인
+                                            > IsoSdk_CanGetTransferState
+                                            > CanHw_StartReceive
                                     > CanTransport_DrainHwRx
                                         - interrupt callback이 넣어둔 hw->rx_queue를 transport queue로 이동
                                     > CanTransport_ProcessTx

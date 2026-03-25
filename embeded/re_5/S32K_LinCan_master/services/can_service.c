@@ -233,16 +233,19 @@ static void CanTransport_ProcessTx(CanTransport *transport)
         return;
     }
 
+    transport->hw_tx_ok_count_seen = transport->hw.tx_ok_count;
+    transport->hw_tx_error_count_seen = transport->hw.tx_error_count;
+
     if (CanHw_StartTx(&transport->hw, &frame) == 0U)
     {
+        transport->tx_in_flight = 0U;
         transport->last_error = CAN_TRANSPORT_ERROR_HW_TX_FAIL;
+        CanTransport_ClearFrame(&transport->current_tx_frame);
         CanTransport_TxDropFront(transport);
         return;
     }
 
     transport->current_tx_frame = frame;
-    transport->hw_tx_ok_count_seen = transport->hw.tx_ok_count;
-    transport->hw_tx_error_count_seen = transport->hw.tx_error_count;
     transport->tx_in_flight = 1U;
 }
 
