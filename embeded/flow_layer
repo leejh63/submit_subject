@@ -1,0 +1,145 @@
+can_slave
+
+ISR
+> RuntimeTick_IrqHandler
+    - counting 500us
+    > 
+
+main 
+> Runtime_Init
+    > RuntimeIo_BoardInit
+        > BoardHw_Init
+            > IsoSdk_BoardInit
+                > CLOCK_SYS_Init
+                > CLOCK_SYS_UpdateConfiguration
+                > PINS_DRV_Init
+                
+    > RuntimeTick_Init
+        - init val
+            - g_runtime_tick_ms
+            - g_runtime_tick_base_count
+            - g_runtime_tick_us_accumulator
+            - g_runtime_tick_hooks[]
+            
+        > TickHw_Init
+            > IsoSdk_TickInit
+                > LPTMR_DRV_Init
+                > INT_SYS_InstallHandler
+                    - RuntimeTick_IrqHandler
+                > INT_SYS_EnableIRQ
+                > LPTMR_DRV_StartCounter
+    > AppCore_Init
+        > RuntimeIo_GetLocalNodeId
+        
+        > AppCore_InitDefaultTexts
+            > AppCore_SetModeText
+            > AppCore_SetButtonText
+            > AppCore_SetAdcText
+            > AppCore_SetCanInputText
+
+        > AppSlave1_Init
+            > AppCore_InitConsoleCan // Why does this function have the word "console" in its name?
+                > CanModule_Init
+                    > InfraQueue_Init
+                    > CanService_Init
+                        > CanProto_Init
+                        > CanTransport_Init
+                            > CanHw_InitDefault
+                                > IsoSdk_CanIsSupported
+                                    - 1 return / can 사용여부 반환 단순 함수
+                                > IsoSdk_CanGetDefaultInstance
+                                    - ISOSDK_SDK_CAN_INSTANCE return
+                                > IsoSdk_CanInitController
+                                    > FLEXCAN_DRV_Init
+                                > IsoSdk_CanInitTxMailbox
+                                    > IsoSdk_CanInitDataInfo
+                                        - set flexcan_data_info_t
+                                    > FLEXCAN_DRV_ConfigTxMb
+                                > IsoSdk_CanConfigRxAcceptAll
+                                    > FLEXCAN_DRV_SetRxMaskType
+                                    > FLEXCAN_DRV_SetRxIndividualMask
+                                > IsoSdk_CanInitRxMailbox
+                                    > IsoSdk_CanInitDataInfo
+                                        - set flexcan_data_info_t
+                                    > FLEXCAN_DRV_ConfigRxMb
+                                > CanHw_StartReceive
+                                    > IsoSdk_CanStartReceive
+                                        > FLEXCAN_DRV_Receive
+
+            > RuntimeIo_GetSlave1LedConfig
+                > BoardHw_GetRgbLedConfig
+                    > IsoSdk_BoardGetRgbLedPort
+                        - config->gpio_port
+                            > IsoSdk_BoardGetRgbLedPort
+                                - ISOSDK_BOARD_PROFILE_RGB_LED_POR return
+                        - config->red_pin
+                            > IsoSdk_BoardGetRgbLedRedPin
+                                - ISOSDK_BOARD_PROFILE_RGB_LED_RED_PIN return
+                        - config->green_pin
+                            > IsoSdk_BoardGetRgbLedGreenPin
+                                - ISOSDK_BOARD_PROFILE_RGB_LED_GREEN_PIN return
+                        - config->active_on_level
+                            > IsoSdk_BoardGetRgbLedActiveOnLevel
+                                - ISOSDK_BOARD_PROFILE_RGB_LED_ACTIVE_ON_LEVEL  return
+
+            > LedModule_Init
+                > IsoSdk_GpioSetPinsDirectionMask
+                    > PINS_DRV_SetPinsDirection
+                    
+                > LedModule_ApplyPattern
+                    > LedModule_ApplyOutputs
+                        > LedModule_WritePin
+                            > IsoSdk_GpioWritePin
+                                > PINS_DRV_WritePin
+                    
+    > Runtime_BuildTaskTable
+        - set the task to do
+        - btn > Runtime_TaskButton
+        - can > Runtime_TaskCan
+        - led > Runtime_TaskLed
+        - heartbeat > Runtime_TaskHeartbeat
+    > RuntimeTick_GetMs
+        - g_runtime_tick_ms return
+    > RuntimeTask_ResetTable
+        - RuntimeTaskEntry's last_run_ms update
+
+> Runtime_Run
+    > RuntimeTask_RunDue
+        
+......채워야함
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
