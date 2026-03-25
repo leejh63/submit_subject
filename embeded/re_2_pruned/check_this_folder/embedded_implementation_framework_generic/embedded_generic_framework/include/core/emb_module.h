@@ -1,0 +1,13 @@
+#ifndef EMB_MODULE_H
+#define EMB_MODULE_H
+
+typedef enum
+{
+    EMB_MODULE_STATE_RESET = 0,
+    EMB_MODULE_STATE_READY,
+    EMB_MODULE_STATE_RUNNING,
+    EMB_MODULE_STATE_STOPPED,
+    EMB_MODULE_STATE_ERROR
+} emb_module_state_t;
+
+#endif
