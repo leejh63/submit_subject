@@ -1,18 +1,14 @@
-/*
- * 고정 크기 ring queue 추상화를 제공하는 헤더다.
- * 여러 모듈이 이 저장 구조를 재사용하여
- * 동적 메모리 없이 메시지를 버퍼링할 수 있게 한다.
- */
+// 고정 크기 ring queue 추상화를 제공하는 헤더다.
+// 여러 모듈이 이 저장 구조를 재사용하여
+// 동적 메모리 없이 메시지를 버퍼링할 수 있게 한다.
 #ifndef INFRA_QUEUE_H
 #define INFRA_QUEUE_H
 
 #include "infra_types.h"
 
-/*
- * 범용 ring queue 메타데이터 구조체다.
- * 실제 저장 공간은 구조체 밖에 두어서,
- * 모듈이 queue 소유권을 명확히 유지한 채 공통 구현을 재사용할 수 있다.
- */
+// 범용 ring queue 메타데이터 구조체다.
+// 실제 저장 공간은 구조체 밖에 두어서,
+// 모듈이 queue 소유권을 명확히 유지한 채 공통 구현을 재사용할 수 있다.
 typedef struct
 {
     uint8_t  *buffer;
@@ -23,11 +19,9 @@ typedef struct
     uint16_t  count;
 } InfraQueue;
 
-/*
- * caller가 소유한 ring queue를 초기화한다.
- * 모듈은 보통 startup 시 한 번 호출하여,
- * queue 메타데이터를 자신이 가진 고정 저장 공간에 연결한다.
- */
+// 호출자가 소유한 ring queue를 초기화한다.
+// 모듈은 보통 시작 직후 시 한 번 호출하여,
+// queue 메타데이터를 자신이 가진 고정 저장 공간에 연결한다.
 InfraStatus InfraQueue_Init(InfraQueue *queue,
                             void *storage,
                             uint16_t item_size,

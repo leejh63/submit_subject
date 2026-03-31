@@ -1,11 +1,9 @@
 #ifndef ISOSDK_BOARD_PROFILE_H
 #define ISOSDK_BOARD_PROFILE_H
 
-/*
- * 보드 배선과 active level은 이 파일 하나에서만 관리한다.
- * 이후 보드가 바뀌면 상위 runtime이나 isosdk_board 구현 대신
- * 이 프로파일 매핑만 수정하는 것을 기본 원칙으로 삼는다.
- */
+// 보드 배선과 active level은 이 파일 하나에서만 관리한다.
+// 이후 보드가 바뀌면 상위 runtime이나 isosdk_board 구현 대신
+// 이 프로파일 매핑만 수정하는 것을 기본 원칙으로 삼는다.
 #define ISOSDK_BOARD_PROFILE_SLAVE1_BUTTON_PORT        ((void *)PTC)
 #define ISOSDK_BOARD_PROFILE_SLAVE1_BUTTON_PIN         12U
 #define ISOSDK_BOARD_PROFILE_SLAVE1_BUTTON_MASK        (1UL << ISOSDK_BOARD_PROFILE_SLAVE1_BUTTON_PIN)

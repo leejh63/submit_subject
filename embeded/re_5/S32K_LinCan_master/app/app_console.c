@@ -1,9 +1,7 @@
-/*
- * UART 콘솔 구현부다.
- * 텍스트 UI를 렌더링하고 사용자 명령을 파싱하며,
- * AppCore가 CAN 작업으로 바꿀 때까지 operator 동작을 버퍼링한다.
- */
-#include "app_console.h"
+// UART 콘솔 기능을 구현한 파일이다.
+// 텍스트 UI를 렌더링하고 사용자 입력을 파싱하며,
+// AppCore가 처리할 명령 형태로 입력을 정리한다.
+#include "app_console_internal.h"
 
 #include <stddef.h>
 #include <stdio.h>
@@ -20,69 +18,91 @@
 #define APP_CONSOLE_ROW_SOURCE_LINE2   16U
 #define APP_CONSOLE_ROW_RESULT         19U
 #define APP_CONSOLE_ROW_INPUT          22U
+#define APP_CONSOLE_ARGV_CAPACITY      16U
 #define APP_CONSOLE_RENDER_BUFFER_SIZE 1024U
 
-/*
- * 콘솔 메시지 영역에 표시되는 기본 help 문자열이다.
- * startup 힌트로도 쓰이고,
- * operator가 직접 입력한 `help` 명령의 응답으로도 사용된다.
- */
-static const char g_app_console_help_text[] =
-    "cmd: help hello ping status ok "
-    "open <id|all> close <id|all> off <id|all> test <id|all> "
-    "text <id|all> <msg> event <id|all> <eventCode> <arg0> <arg1>";
+typedef void (*AppConsoleCommandHandler)(AppConsole *console, uint8_t argc, char *argv[]);
 
-/*
- * 콘솔 전체 view를 dirty 상태로 표시한다.
- * 초기화나 recover 이후에는 full refresh를 사용해,
- * 다음 렌더 시 전체 terminal layout을 다시 그리게 한다.
- */
+typedef struct
+{
+    const char               *name;
+    AppConsoleCommandHandler  handler;
+} AppConsoleCommandSpec;
+
+// 콘솔 전체 view를 dirty 상태로 표시한다.
+// 초기화나 복구 이후에는 full refresh를 사용하여,
+// 다음 렌더 시 전체 terminal layout을 다시 출력하게 한다.
 static void AppConsole_RequestFullRefresh(AppConsole *console);
 static void AppConsole_RequestInputRefresh(AppConsole *console);
 static void AppConsole_RequestTaskRefresh(AppConsole *console);
 static void AppConsole_RequestSourceRefresh(AppConsole *console);
 static void AppConsole_RequestResultRefresh(AppConsole *console);
 static void AppConsole_RequestValueRefresh(AppConsole *console);
-/*
- * cached view 문자열이 실제로 바뀌었을 때만 갱신한다.
- * 불필요한 UART 트래픽을 줄이고,
- * dirty flag가 의미 있는 내용 변경과 맞물리게 유지한다.
- */
+// cached view 문자열이 실제로 변경된 경우에만 갱신한다.
+// 불필요한 UART 출력량을 줄이고,
+// dirty flag가 실제 내용 변경과 일치하도록 유지한다.
 static void AppConsole_SetViewText(char *dst, uint16_t dst_size, const char *src, uint8_t *out_changed);
 static void AppConsole_UpdateInputView(AppConsole *console);
-/*
- * 고정 terminal layout을 한 번 그린다.
- * section header와 cursor 위치 지정은 여기서 출력하고,
- * 이후 렌더는 바뀐 내용 줄만 갱신하면 되게 만든다.
- */
+// 고정 terminal layout을 한 번 출력한다.
+// section header와 cursor 위치 지정은 여기서 처리하고,
+// 이후 렌더 단계에서는 변경된 줄만 갱신할 수 있게 한다.
 static void AppConsole_RenderLayout(AppConsole *console);
-/*
- * 내용이 바뀐 콘솔 줄만 출력한다.
- * 매 렌더 주기마다 전체 terminal을 다시 그리지 않아도 되어,
- * UART UI가 더 responsive하게 동작한다.
- */
+// 내용이 변경된 콘솔 줄만 출력한다.
+// 매 렌더 주기마다 전체 terminal을 다시 그리지 않아도 되므로,
+// UART UI의 출력 부하와 깜빡임을 줄일 수 있다.
 static void AppConsole_RenderDirtyLines(AppConsole *console);
 static const char *AppConsole_GetUartErrorText(UartErrorCode error_code);
 static uint8_t AppConsole_IsSpaceChar(char ch);
-/*
- * 콘솔 입력에서 작은 unsigned integer를 파싱한다.
- * parser를 의도적으로 엄격하게 두어,
- * 잘못된 명령 인자가 CAN 계층까지 내려가기 전에 걸러지게 한다.
- */
+// 콘솔 입력 문자열에서 작은 unsigned integer를 파싱한다.
+// 파서를 의도적으로 엄격하게 두어,
+// 잘못된 인자가 CAN 계층까지 내려가기 전에 차단한다.
 static uint8_t AppConsole_ParseU8(const char *text, uint8_t *out_value);
 static uint8_t AppConsole_ParseTarget(const char *text, uint8_t *out_node_id, uint8_t *out_is_broadcast);
 static uint8_t AppConsole_Tokenize(char *buffer, char *argv[], uint8_t argv_capacity, uint8_t *out_argc);
-/*
- * 완성된 콘솔 입력 한 줄을 파싱한다.
- * 일부 명령은 로컬에서 처리하고,
- * 나머지는 app 계층이 보낼 CAN 요청으로 queue에 넣는다.
- */
+static void AppConsole_BuildHelpText(char *buffer, uint16_t buffer_size);
+static const AppConsoleCommandSpec *AppConsole_FindCommandSpec(const char *name);
+static void AppConsole_HandleHelpCommand(AppConsole *console, uint8_t argc, char *argv[]);
+static void AppConsole_HandleHelloCommand(AppConsole *console, uint8_t argc, char *argv[]);
+static void AppConsole_HandlePingCommand(AppConsole *console, uint8_t argc, char *argv[]);
+static void AppConsole_HandleStatusCommand(AppConsole *console, uint8_t argc, char *argv[]);
+static void AppConsole_HandleOkCommand(AppConsole *console, uint8_t argc, char *argv[]);
+static void AppConsole_HandleTargetCanCommand(AppConsole *console,
+                                              uint8_t argc,
+                                              char *argv[],
+                                              uint8_t command_type);
+static void AppConsole_HandleOpenCommand(AppConsole *console, uint8_t argc, char *argv[]);
+static void AppConsole_HandleCloseCommand(AppConsole *console, uint8_t argc, char *argv[]);
+static void AppConsole_HandleOffCommand(AppConsole *console, uint8_t argc, char *argv[]);
+static void AppConsole_HandleTestCommand(AppConsole *console, uint8_t argc, char *argv[]);
+static void AppConsole_HandleTextCommand(AppConsole *console, uint8_t argc, char *argv[]);
+static void AppConsole_HandleEventCommand(AppConsole *console, uint8_t argc, char *argv[]);
+static void AppConsole_QueueCanCommand(AppConsole *console, const AppConsoleCanCommand *command);
+// 완성된 콘솔 입력 한 줄을 파싱한다.
+// 일부 명령은 로컬에서 처리하고,
+// 나머지는 app 계층이 전송할 CAN 요청으로 큐에 적재한다.
 static void AppConsole_HandleLine(AppConsole *console, const char *line);
 static void AppConsole_ExtractTextLine(const char *src,
                                        uint8_t line_index,
                                        char *out_buffer,
                                        uint16_t out_buffer_size);
 
+// 명령 문자열과 실제 처리 함수를 연결하는 콘솔 명령 테이블이다.
+static const AppConsoleCommandSpec g_app_console_command_table[] =
+{
+    { "help", AppConsole_HandleHelpCommand },
+    { "hello", AppConsole_HandleHelloCommand },
+    { "ping", AppConsole_HandlePingCommand },
+    { "status", AppConsole_HandleStatusCommand },
+    { "ok", AppConsole_HandleOkCommand },
+    { "open", AppConsole_HandleOpenCommand },
+    { "close", AppConsole_HandleCloseCommand },
+    { "off", AppConsole_HandleOffCommand },
+    { "test", AppConsole_HandleTestCommand },
+    { "text", AppConsole_HandleTextCommand },
+    { "event", AppConsole_HandleEventCommand }
+};
+
+// UART service 에러 코드를 표시용 문자열로 변환한다.
 static const char *AppConsole_GetUartErrorText(UartErrorCode error_code)
 {
     switch (error_code)
@@ -107,6 +127,273 @@ static const char *AppConsole_GetUartErrorText(UartErrorCode error_code)
     }
 }
 
+// 현재 등록된 명령 이름 목록을 결과 영역 한 줄에 맞춰 구성한다.
+static void AppConsole_BuildHelpText(char *buffer, uint16_t buffer_size)
+{
+    uint8_t index;
+    char   *write_ptr;
+    size_t  remaining;
+    int     written;
+
+    if ((buffer == NULL) || (buffer_size == 0U))
+    {
+        return;
+    }
+
+    buffer[0] = '\0';
+    write_ptr = buffer;
+    remaining = buffer_size;
+
+    for (index = 0U;
+         index < (uint8_t)(sizeof(g_app_console_command_table) / sizeof(g_app_console_command_table[0]));
+         index++)
+    {
+        written = snprintf(write_ptr,
+                           remaining,
+                           "%s%s",
+                           (index == 0U) ? "cmd: " : " ",
+                           g_app_console_command_table[index].name);
+        if ((written <= 0) || ((size_t)written >= remaining))
+        {
+            break;
+        }
+
+        write_ptr += written;
+        remaining -= (size_t)written;
+    }
+}
+
+// 첫 토큰과 일치하는 명령 스펙을 테이블에서 찾는다.
+static const AppConsoleCommandSpec *AppConsole_FindCommandSpec(const char *name)
+{
+    uint8_t index;
+
+    if (name == NULL)
+    {
+        return NULL;
+    }
+
+    for (index = 0U;
+         index < (uint8_t)(sizeof(g_app_console_command_table) / sizeof(g_app_console_command_table[0]));
+         index++)
+    {
+        if (strcmp(name, g_app_console_command_table[index].name) == 0)
+        {
+            return &g_app_console_command_table[index];
+        }
+    }
+
+    return NULL;
+}
+
+static void AppConsole_HandleHelpCommand(AppConsole *console, uint8_t argc, char *argv[])
+{
+    char help_text[APP_CONSOLE_RESULT_VIEW_SIZE];
+
+    (void)argv;
+    if (argc != 1U)
+    {
+        AppConsole_SetResultText(console, "[error] invalid command");
+        return;
+    }
+
+    AppConsole_BuildHelpText(help_text, (uint16_t)sizeof(help_text));
+    AppConsole_SetResultText(console, help_text);
+}
+
+static void AppConsole_HandleHelloCommand(AppConsole *console, uint8_t argc, char *argv[])
+{
+    (void)argv;
+    if (argc != 1U)
+    {
+        AppConsole_SetResultText(console, "[error] invalid command");
+        return;
+    }
+
+    AppConsole_SetResultText(console, "hello");
+}
+
+static void AppConsole_HandlePingCommand(AppConsole *console, uint8_t argc, char *argv[])
+{
+    (void)argv;
+    if (argc != 1U)
+    {
+        AppConsole_SetResultText(console, "[error] invalid command");
+        return;
+    }
+
+    AppConsole_SetResultText(console, "pong");
+}
+
+static void AppConsole_HandleStatusCommand(AppConsole *console, uint8_t argc, char *argv[])
+{
+    char status_text[APP_CONSOLE_RESULT_VIEW_SIZE];
+
+    (void)argv;
+    if (argc != 1U)
+    {
+        AppConsole_SetResultText(console, "[error] invalid command");
+        return;
+    }
+
+    (void)snprintf(status_text,
+                   sizeof(status_text),
+                   "state=%u uart_err=%u rx_len=%u tx_busy=%u cmd_q=%u/%u",
+                   (unsigned int)console->state,
+                   (unsigned int)UartService_HasError(&console->uart),
+                   (unsigned int)UartService_GetCurrentInputLength(&console->uart),
+                   (unsigned int)UartService_IsTxBusy(&console->uart),
+                   (unsigned int)InfraQueue_GetCount(&console->can_cmd_queue),
+                   (unsigned int)InfraQueue_GetCapacity(&console->can_cmd_queue));
+    AppConsole_SetResultText(console, status_text);
+}
+
+static void AppConsole_HandleOkCommand(AppConsole *console, uint8_t argc, char *argv[])
+{
+    (void)argv;
+    if (argc != 1U)
+    {
+        AppConsole_SetResultText(console, "[error] invalid command");
+        return;
+    }
+
+    // 현재 컨셉에서는 실제 운용상 `ok`가 핵심 로컬 액션이다.
+    console->local_ok_pending = 1U;
+    AppConsole_SetResultText(console, "[queued] local ok");
+}
+
+// 공통적인 대상 지정형 CAN 명령은 같은 파서 경로를 공유한다.
+static void AppConsole_HandleTargetCanCommand(AppConsole *console,
+                                              uint8_t argc,
+                                              char *argv[],
+                                              uint8_t command_type)
+{
+    AppConsoleCanCommand command;
+    uint8_t              target_is_broadcast;
+
+    if (argc != 2U)
+    {
+        AppConsole_SetResultText(console, "[error] invalid command");
+        return;
+    }
+
+    (void)memset(&command, 0, sizeof(command));
+    if (AppConsole_ParseTarget(argv[1], &command.target_node_id, &target_is_broadcast) == 0U)
+    {
+        AppConsole_SetResultText(console, "[error] invalid command");
+        return;
+    }
+
+    command.type = command_type;
+    command.target_is_broadcast = target_is_broadcast;
+    AppConsole_QueueCanCommand(console, &command);
+}
+
+static void AppConsole_HandleOpenCommand(AppConsole *console, uint8_t argc, char *argv[])
+{
+    AppConsole_HandleTargetCanCommand(console, argc, argv, APP_CONSOLE_CAN_CMD_OPEN);
+}
+
+static void AppConsole_HandleCloseCommand(AppConsole *console, uint8_t argc, char *argv[])
+{
+    AppConsole_HandleTargetCanCommand(console, argc, argv, APP_CONSOLE_CAN_CMD_CLOSE);
+}
+
+static void AppConsole_HandleOffCommand(AppConsole *console, uint8_t argc, char *argv[])
+{
+    AppConsole_HandleTargetCanCommand(console, argc, argv, APP_CONSOLE_CAN_CMD_OFF);
+}
+
+static void AppConsole_HandleTestCommand(AppConsole *console, uint8_t argc, char *argv[])
+{
+    AppConsole_HandleTargetCanCommand(console, argc, argv, APP_CONSOLE_CAN_CMD_TEST);
+}
+
+static void AppConsole_HandleTextCommand(AppConsole *console, uint8_t argc, char *argv[])
+{
+    AppConsoleCanCommand command;
+    uint8_t              target_is_broadcast;
+    uint8_t              index;
+    size_t               remaining;
+    char                *write_ptr;
+    int                  written;
+
+    if (argc < 3U)
+    {
+        AppConsole_SetResultText(console, "[error] invalid command");
+        return;
+    }
+
+    (void)memset(&command, 0, sizeof(command));
+    if (AppConsole_ParseTarget(argv[1], &command.target_node_id, &target_is_broadcast) == 0U)
+    {
+        AppConsole_SetResultText(console, "[error] invalid command");
+        return;
+    }
+
+    command.type = APP_CONSOLE_CAN_CMD_TEXT;
+    command.target_is_broadcast = target_is_broadcast;
+    command.text[0] = '\0';
+    write_ptr = command.text;
+    remaining = sizeof(command.text);
+
+    for (index = 2U; index < argc; index++)
+    {
+        if (index > 2U)
+        {
+            if (remaining <= 1U)
+            {
+                AppConsole_SetResultText(console, "[error] text too long");
+                return;
+            }
+
+            *write_ptr = ' ';
+            write_ptr++;
+            *write_ptr = '\0';
+            remaining--;
+        }
+
+        written = snprintf(write_ptr, remaining, "%s", argv[index]);
+        if ((written <= 0) || ((size_t)written >= remaining))
+        {
+            AppConsole_SetResultText(console, "[error] text too long");
+            return;
+        }
+
+        write_ptr += written;
+        remaining -= (size_t)written;
+    }
+
+    AppConsole_QueueCanCommand(console, &command);
+}
+
+static void AppConsole_HandleEventCommand(AppConsole *console, uint8_t argc, char *argv[])
+{
+    AppConsoleCanCommand command;
+    uint8_t              target_is_broadcast;
+
+    if (argc != 5U)
+    {
+        AppConsole_SetResultText(console, "[error] invalid command");
+        return;
+    }
+
+    (void)memset(&command, 0, sizeof(command));
+    if ((AppConsole_ParseTarget(argv[1], &command.target_node_id, &target_is_broadcast) == 0U) ||
+        (AppConsole_ParseU8(argv[2], &command.event_code) == 0U) ||
+        (AppConsole_ParseU8(argv[3], &command.arg0) == 0U) ||
+        (AppConsole_ParseU8(argv[4], &command.arg1) == 0U))
+    {
+        AppConsole_SetResultText(console, "[error] invalid command");
+        return;
+    }
+
+    command.type = APP_CONSOLE_CAN_CMD_EVENT;
+    command.target_is_broadcast = target_is_broadcast;
+    AppConsole_QueueCanCommand(console, &command);
+}
+
+// 다음 렌더 시 콘솔 전체 view를 다시 출력하도록 표시한다.
 static void AppConsole_RequestFullRefresh(AppConsole *console)
 {
     if (console == NULL)
@@ -122,6 +409,7 @@ static void AppConsole_RequestFullRefresh(AppConsole *console)
     console->view.value_dirty = 1U;
 }
 
+// 입력 줄만 다시 출력하면 됨을 표시한다.
 static void AppConsole_RequestInputRefresh(AppConsole *console)
 {
     if (console != NULL)
@@ -130,6 +418,7 @@ static void AppConsole_RequestInputRefresh(AppConsole *console)
     }
 }
 
+// task 상태 영역만 다시 출력하면 됨을 표시한다.
 static void AppConsole_RequestTaskRefresh(AppConsole *console)
 {
     if (console != NULL)
@@ -138,6 +427,7 @@ static void AppConsole_RequestTaskRefresh(AppConsole *console)
     }
 }
 
+// source 영역만 다시 출력하면 됨을 표시한다.
 static void AppConsole_RequestSourceRefresh(AppConsole *console)
 {
     if (console != NULL)
@@ -146,6 +436,7 @@ static void AppConsole_RequestSourceRefresh(AppConsole *console)
     }
 }
 
+// 결과 메시지 영역만 다시 출력하면 됨을 표시한다.
 static void AppConsole_RequestResultRefresh(AppConsole *console)
 {
     if (console != NULL)
@@ -154,6 +445,7 @@ static void AppConsole_RequestResultRefresh(AppConsole *console)
     }
 }
 
+// value 영역만 다시 출력하면 됨을 표시한다.
 static void AppConsole_RequestValueRefresh(AppConsole *console)
 {
     if (console != NULL)
@@ -162,6 +454,7 @@ static void AppConsole_RequestValueRefresh(AppConsole *console)
     }
 }
 
+// 새 문자열이 실제로 달라졌을 때만 cached view 텍스트를 갱신한다.
 static void AppConsole_SetViewText(char *dst, uint16_t dst_size, const char *src, uint8_t *out_changed)
 {
     char temp[APP_CONSOLE_RENDER_BUFFER_SIZE];
@@ -182,6 +475,7 @@ static void AppConsole_SetViewText(char *dst, uint16_t dst_size, const char *src
     *out_changed = 1U;
 }
 
+// 결과 메시지 영역의 텍스트를 갱신하고 dirty flag를 설정한다.
 void AppConsole_SetResultText(AppConsole *console, const char *text)
 {
     uint8_t changed;
@@ -201,6 +495,7 @@ void AppConsole_SetResultText(AppConsole *console, const char *text)
     }
 }
 
+// task 상태 영역의 텍스트를 갱신하고 dirty flag를 설정한다.
 void AppConsole_SetTaskText(AppConsole *console, const char *text)
 {
     uint8_t changed;
@@ -220,6 +515,7 @@ void AppConsole_SetTaskText(AppConsole *console, const char *text)
     }
 }
 
+// source 영역의 텍스트를 갱신하고 dirty flag를 설정한다.
 void AppConsole_SetSourceText(AppConsole *console, const char *text)
 {
     uint8_t changed;
@@ -239,6 +535,7 @@ void AppConsole_SetSourceText(AppConsole *console, const char *text)
     }
 }
 
+// value 영역의 텍스트를 갱신하고 dirty flag를 설정한다.
 void AppConsole_SetValueText(AppConsole *console, const char *text)
 {
     uint8_t changed;
@@ -258,6 +555,7 @@ void AppConsole_SetValueText(AppConsole *console, const char *text)
     }
 }
 
+// 현재 UART 입력 중인 한 줄을 view cache에 반영한다.
 static void AppConsole_UpdateInputView(AppConsole *console)
 {
     char     input_text[APP_CONSOLE_INPUT_VIEW_SIZE];
@@ -285,6 +583,7 @@ static void AppConsole_UpdateInputView(AppConsole *console)
     }
 }
 
+// 터미널 전체 레이아웃과 섹션 제목을 한 번 그린다.
 static void AppConsole_RenderLayout(AppConsole *console)
 {
     char        render_buffer[APP_CONSOLE_RENDER_BUFFER_SIZE];
@@ -329,6 +628,7 @@ static void AppConsole_RenderLayout(AppConsole *console)
     }
 }
 
+// 여러 줄 텍스트에서 원하는 한 줄만 뽑아 렌더 버퍼로 옮긴다.
 static void AppConsole_ExtractTextLine(const char *src,
                                        uint8_t line_index,
                                        char *out_buffer,
@@ -378,6 +678,7 @@ static void AppConsole_ExtractTextLine(const char *src,
     out_buffer[out_index] = '\0';
 }
 
+// dirty로 표시된 줄만 선택해서 ANSI escape 기반 갱신 문자열을 만든다.
 static void AppConsole_RenderDirtyLines(AppConsole *console)
 {
     char render_buffer[APP_CONSOLE_RENDER_BUFFER_SIZE];
@@ -493,11 +794,15 @@ static void AppConsole_RenderDirtyLines(AppConsole *console)
     }
 }
 
+// tokenizer가 구분자로 볼 공백류 문자 하나인지 확인한다.
 static uint8_t AppConsole_IsSpaceChar(char ch)
 {
     return (ch == ' ') || (ch == '\t') || (ch == '\r') || (ch == '\n');
 }
 
+// 콘솔 입력 문자열에서 작은 unsigned integer를 파싱한다.
+// 파서를 의도적으로 엄격하게 두어,
+// 잘못된 인자가 CAN 계층까지 내려가기 전에 차단한다.
 static uint8_t AppConsole_ParseU8(const char *text, uint8_t *out_value)
 {
     uint16_t value;
@@ -528,6 +833,7 @@ static uint8_t AppConsole_ParseU8(const char *text, uint8_t *out_value)
     return 1U;
 }
 
+// 대상 노드 표현을 개별 node id나 broadcast 대상으로 해석한다.
 static uint8_t AppConsole_ParseTarget(const char *text, uint8_t *out_node_id, uint8_t *out_is_broadcast)
 {
     uint8_t node_id;
@@ -559,6 +865,7 @@ static uint8_t AppConsole_ParseTarget(const char *text, uint8_t *out_node_id, ui
     return 1U;
 }
 
+// 입력 한 줄을 공백 기준 토큰 배열로 나눈다.
 static uint8_t AppConsole_Tokenize(char *buffer, char *argv[], uint8_t argv_capacity, uint8_t *out_argc)
 {
     uint8_t argc;
@@ -610,11 +917,9 @@ static uint8_t AppConsole_Tokenize(char *buffer, char *argv[], uint8_t argv_capa
     return 1U;
 }
 
-/*
- * 파싱이 끝난 CAN 명령 하나를 콘솔 요청 큐에 넣는다.
- * AppCore는 CAN task에서 이 큐를 비우므로,
- * 사용자 입력 처리와 실제 통신 작업이 느슨하게 분리된다.
- */
+// 파싱이 끝난 CAN 명령 하나를 콘솔 요청 큐에 넣는다.
+// AppCore는 CAN task에서 이 큐를 비우므로,
+// 사용자 입력 처리와 실제 통신 작업이 느슨하게 분리된다.
 static void AppConsole_QueueCanCommand(AppConsole *console, const AppConsoleCanCommand *command)
 {
     if ((console == NULL) || (command == NULL))
@@ -654,59 +959,16 @@ static void AppConsole_QueueCanCommand(AppConsole *console, const AppConsoleCanC
     }
 }
 
+// 완성된 콘솔 입력 한 줄을 해석해 로컬 명령이든 CAN 명령이든 맞는 경로로 보낸다.
 static void AppConsole_HandleLine(AppConsole *console, const char *line)
 {
-    char                 parse_buffer[APP_CONSOLE_LINE_BUFFER_SIZE];
-    char                *argv[16];
-    uint8_t              argc;
-    AppConsoleCanCommand command;
-    uint8_t              index;
-    uint8_t              target_is_broadcast;
+    char                        parse_buffer[APP_CONSOLE_LINE_BUFFER_SIZE];
+    char                       *argv[APP_CONSOLE_ARGV_CAPACITY];
+    uint8_t                     argc;
+    const AppConsoleCommandSpec *command_spec;
 
     if ((console == NULL) || (line == NULL))
     {
-        return;
-    }
-
-    if (strcmp(line, "help") == 0)
-    {
-        AppConsole_SetResultText(console, g_app_console_help_text);
-        return;
-    }
-
-    if (strcmp(line, "hello") == 0)
-    {
-        AppConsole_SetResultText(console, "hello");
-        return;
-    }
-
-    if (strcmp(line, "ping") == 0)
-    {
-        AppConsole_SetResultText(console, "pong");
-        return;
-    }
-
-    if (strcmp(line, "status") == 0)
-    {
-        char status_text[APP_CONSOLE_RESULT_VIEW_SIZE];
-
-        (void)snprintf(status_text,
-                       sizeof(status_text),
-                       "state=%u uart_err=%u rx_len=%u tx_busy=%u cmd_q=%u/%u",
-                       (unsigned int)console->state,
-                       (unsigned int)UartService_HasError(&console->uart),
-                       (unsigned int)UartService_GetCurrentInputLength(&console->uart),
-                       (unsigned int)UartService_IsTxBusy(&console->uart),
-                       (unsigned int)InfraQueue_GetCount(&console->can_cmd_queue),
-                       (unsigned int)InfraQueue_GetCapacity(&console->can_cmd_queue));
-        AppConsole_SetResultText(console, status_text);
-        return;
-    }
-
-    if (strcmp(line, "ok") == 0)
-    {
-        console->local_ok_pending = 1U;
-        AppConsole_SetResultText(console, "[queued] local ok");
         return;
     }
 
@@ -725,115 +987,19 @@ static void AppConsole_HandleLine(AppConsole *console, const char *line)
         return;
     }
 
-    (void)memset(&command, 0, sizeof(command));
-    if ((strcmp(argv[0], "open") == 0) ||
-        (strcmp(argv[0], "close") == 0) ||
-        (strcmp(argv[0], "off") == 0) ||
-        (strcmp(argv[0], "test") == 0))
+    command_spec = AppConsole_FindCommandSpec(argv[0]);
+    if (command_spec == NULL)
     {
-        if ((argc != 2U) || (AppConsole_ParseTarget(argv[1], &command.target_node_id, &target_is_broadcast) == 0U))
-        {
-            AppConsole_SetResultText(console, "[error] invalid command");
-            return;
-        }
-
-        command.target_is_broadcast = target_is_broadcast;
-        if (strcmp(argv[0], "open") == 0)
-        {
-            command.type = APP_CONSOLE_CAN_CMD_OPEN;
-        }
-        else if (strcmp(argv[0], "close") == 0)
-        {
-            command.type = APP_CONSOLE_CAN_CMD_CLOSE;
-        }
-        else if (strcmp(argv[0], "off") == 0)
-        {
-            command.type = APP_CONSOLE_CAN_CMD_OFF;
-        }
-        else
-        {
-            command.type = APP_CONSOLE_CAN_CMD_TEST;
-        }
-
-        AppConsole_QueueCanCommand(console, &command);
+        AppConsole_SetResultText(console, "[error] unsupported command");
         return;
     }
 
-    if (strcmp(argv[0], "text") == 0)
-    {
-        size_t remaining;
-        char  *write_ptr;
-        int    written;
-
-        if ((argc < 3U) || (AppConsole_ParseTarget(argv[1], &command.target_node_id, &target_is_broadcast) == 0U))
-        {
-            AppConsole_SetResultText(console, "[error] invalid command");
-            return;
-        }
-
-        command.type = APP_CONSOLE_CAN_CMD_TEXT;
-        command.target_is_broadcast = target_is_broadcast;
-        command.text[0] = '\0';
-        write_ptr = command.text;
-        remaining = sizeof(command.text);
-
-        for (index = 2U; index < argc; index++)
-        {
-            if (index > 2U)
-            {
-                if (remaining <= 1U)
-                {
-                    AppConsole_SetResultText(console, "[error] text too long");
-                    return;
-                }
-
-                *write_ptr = ' ';
-                write_ptr++;
-                *write_ptr = '\0';
-                remaining--;
-            }
-
-            written = snprintf(write_ptr, remaining, "%s", argv[index]);
-            if ((written <= 0) || ((size_t)written >= remaining))
-            {
-                AppConsole_SetResultText(console, "[error] text too long");
-                return;
-            }
-
-            write_ptr += written;
-            remaining -= (size_t)written;
-        }
-
-        AppConsole_QueueCanCommand(console, &command);
-        return;
-    }
-
-    if (strcmp(argv[0], "event") == 0)
-    {
-        if ((argc != 5U) ||
-            (AppConsole_ParseTarget(argv[1], &command.target_node_id, &target_is_broadcast) == 0U) ||
-            (AppConsole_ParseU8(argv[2], &command.event_code) == 0U) ||
-            (AppConsole_ParseU8(argv[3], &command.arg0) == 0U) ||
-            (AppConsole_ParseU8(argv[4], &command.arg1) == 0U))
-        {
-            AppConsole_SetResultText(console, "[error] invalid command");
-            return;
-        }
-
-        command.type = APP_CONSOLE_CAN_CMD_EVENT;
-        command.target_is_broadcast = target_is_broadcast;
-        AppConsole_QueueCanCommand(console, &command);
-        return;
-    }
-
-    AppConsole_SetResultText(console, "[error] unsupported command");
+    command_spec->handler(console, argc, argv);
 }
 
-/*
- * 콘솔 상태와 UART transport를 초기화한다.
- * live 데이터가 오기 전에도 operator가 구조화된 화면을 보도록,
- * view에 기본 placeholder 문자열을 미리 채워둔다.
- */
+// 콘솔 상태와 UART transport를 초기화한다.
+// live 데이터가 오기 전에도 operator가 구조화된 화면을 보도록,
+// view에 기본 placeholder 문자열을 미리 채워둔다.
 InfraStatus AppConsole_Init(AppConsole *console, uint8_t node_id)
 {
     if (console == NULL)
@@ -869,10 +1035,8 @@ InfraStatus AppConsole_Init(AppConsole *console, uint8_t node_id)
                    sizeof(console->view.source_text),
                    "from [can] \"waiting\"\r\n"
                    "from [lin] \"waiting\"");
-    (void)snprintf(console->view.result_text,
-                   sizeof(console->view.result_text),
-                   "%s",
-                   g_app_console_help_text);
+    AppConsole_BuildHelpText(console->view.result_text,
+                             (uint16_t)sizeof(console->view.result_text));
     (void)snprintf(console->view.value_text,
                    sizeof(console->view.value_text),
                    "Mode   : waiting\r\n"
@@ -884,11 +1048,9 @@ InfraStatus AppConsole_Init(AppConsole *console, uint8_t node_id)
     return INFRA_STATUS_OK;
 }
 
-/*
- * UART RX/TX 작업을 진행시키고 완성된 입력 줄을 처리한다.
- * 오류 처리와 `recover` 명령도 여기 들어 있어,
- * 펌웨어 재시작 없이 콘솔을 복구할 수 있게 한다.
- */
+// UART RX/TX 작업을 진행시키고 완성된 입력 줄을 처리한다.
+// 오류 처리와 `recover` 명령도 여기 들어 있어,
+// 프로그램을 다시 시작하지 않고도 콘솔을 복구할 수 있게 한다.
 void AppConsole_Task(AppConsole *console, uint32_t now_ms)
 {
     char line_buffer[APP_CONSOLE_LINE_BUFFER_SIZE];
@@ -941,11 +1103,9 @@ void AppConsole_Task(AppConsole *console, uint32_t now_ms)
     UartService_ProcessTx(&console->uart, now_ms);
 }
 
-/*
- * 현재 dirty flag에 따라 콘솔 UI를 갱신한다.
- * layout과 바뀐 줄을 분리해서 보내므로,
- * 작은 텍스트 필드 하나만 변해도 효율적으로 렌더링할 수 있다.
- */
+// 현재 dirty flag에 따라 콘솔 UI를 갱신한다.
+// layout과 바뀐 줄을 분리해서 보내므로,
+// 작은 텍스트 필드 하나만 변해도 효율적으로 렌더링할 수 있다.
 void AppConsole_Render(AppConsole *console)
 {
     if ((console == NULL) || (console->initialized == 0U))
@@ -972,6 +1132,7 @@ void AppConsole_Render(AppConsole *console)
     AppConsole_RenderDirtyLines(console);
 }
 
+// 콘솔이 queue에 쌓아 둔 CAN 명령 하나를 app 쪽으로 넘긴다.
 uint8_t AppConsole_TryPopCanCommand(AppConsole *console, AppConsoleCanCommand *out_cmd)
 {
     if ((console == NULL) || (out_cmd == NULL))
@@ -982,6 +1143,7 @@ uint8_t AppConsole_TryPopCanCommand(AppConsole *console, AppConsoleCanCommand *o
     return (InfraQueue_Pop(&console->can_cmd_queue, out_cmd) == INFRA_STATUS_OK) ? 1U : 0U;
 }
 
+// 로컬 ok 입력 pending 상태를 한 번만 읽히는 형태로 소비한다.
 uint8_t AppConsole_ConsumeLocalOk(AppConsole *console)
 {
     uint8_t pending;
@@ -996,6 +1158,7 @@ uint8_t AppConsole_ConsumeLocalOk(AppConsole *console)
     return pending;
 }
 
+// 콘솔이 현재 오류 정지 상태인지 확인한다.
 uint8_t AppConsole_IsError(const AppConsole *console)
 {
     if (console == NULL)

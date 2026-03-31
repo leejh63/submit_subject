@@ -4,11 +4,9 @@
 #include "sdk_project_config.h"
 #include "status.h"
 
-/*
- * SDK generated 변수명은 이 파일에서만 직접 참조한다.
- * Config Tools 재생성으로 이름이 바뀌어도 상위 IsoSdk 구현은
- * 이 매핑만 수정하면 유지되도록 의도한 내부 전용 바인딩 헤더다.
- */
+// SDK generated 변수명은 이 파일에서만 직접 참조한다.
+// Config Tools 재생성으로 이름이 바뀌어도 상위 IsoSdk 구현은
+// 이 매핑만 수정하면 유지되도록 의도한 내부 전용 바인딩 헤더다.
 #define ISOSDK_SDK_CLOCK_CONFIGS            g_clockManConfigsArr
 #define ISOSDK_SDK_CLOCK_CONFIG_COUNT       CLOCK_MANAGER_CONFIG_CNT
 #define ISOSDK_SDK_CLOCK_CALLBACKS          g_clockManCallbacksArr

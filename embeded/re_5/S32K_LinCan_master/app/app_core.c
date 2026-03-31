@@ -1,8 +1,6 @@
-/*
- * master 전용 애플리케이션 오케스트레이션 구현부다.
- * coordinator에 필요한 console, CAN, LIN 경로만 연결하여,
- * 다른 노드 역할 분기 없이 master 흐름만 남긴다.
- */
+// master 측 주요 제어 흐름을 구성하는 파일이다.
+// console, CAN, LIN 경로를 연결하고,
+// master 동작에 필요한 공통 상태와 표시 문자열을 관리한다.
 #include "app_core.h"
 
 #include <stddef.h>
@@ -14,6 +12,9 @@
 #include "app_master.h"
 #include "../runtime/runtime_io.h"
 
+// 짧은 UI 텍스트 버퍼를 안전하게 갱신한다.
+// 여러 view 필드가 동일한 복사 규칙을 사용하므로,
+// 문자열 갱신 방식을 이 보조 함수로 통일한다.
 static void AppCore_SetText(char *buffer, size_t size, const char *text)
 {
     if ((buffer == NULL) || (size == 0U) || (text == NULL))
@@ -24,6 +25,7 @@ static void AppCore_SetText(char *buffer, size_t size, const char *text)
     (void)snprintf(buffer, size, "%s", text);
 }
 
+// 현재 시스템 모드 표시 문자열을 갱신한다.
 void AppCore_SetModeText(AppCore *app, const char *text)
 {
     if (app != NULL)
@@ -32,6 +34,7 @@ void AppCore_SetModeText(AppCore *app, const char *text)
     }
 }
 
+// 승인 버튼 관련 상태 문자열을 갱신한다.
 void AppCore_SetButtonText(AppCore *app, const char *text)
 {
     if (app != NULL)
@@ -40,6 +43,7 @@ void AppCore_SetButtonText(AppCore *app, const char *text)
     }
 }
 
+// ADC 상태 표시 문자열을 갱신한다.
 void AppCore_SetAdcText(AppCore *app, const char *text)
 {
     if (app != NULL)
@@ -48,6 +52,7 @@ void AppCore_SetAdcText(AppCore *app, const char *text)
     }
 }
 
+// CAN 입력 상태 표시 문자열을 갱신한다.
 void AppCore_SetCanInputText(AppCore *app, const char *text)
 {
     if (app != NULL)
@@ -56,6 +61,7 @@ void AppCore_SetCanInputText(AppCore *app, const char *text)
     }
 }
 
+// LIN 입력 상태 표시 문자열을 갱신한다.
 void AppCore_SetLinInputText(AppCore *app, const char *text)
 {
     if (app != NULL)
@@ -64,6 +70,7 @@ void AppCore_SetLinInputText(AppCore *app, const char *text)
     }
 }
 
+// LIN 링크 상태 표시 문자열을 갱신한다.
 void AppCore_SetLinLinkText(AppCore *app, const char *text)
 {
     if (app != NULL)
@@ -72,6 +79,7 @@ void AppCore_SetLinLinkText(AppCore *app, const char *text)
     }
 }
 
+// 콘솔 결과 영역에 표시할 문자열을 갱신한다.
 void AppCore_SetResultText(AppCore *app, const char *text)
 {
     if ((app != NULL) && (app->console_enabled != 0U))
@@ -80,6 +88,7 @@ void AppCore_SetResultText(AppCore *app, const char *text)
     }
 }
 
+// LIN zone 값을 사람이 읽기 쉬운 짧은 문자열로 변환한다.
 const char *AppCore_GetLinZoneText(uint8_t zone)
 {
     switch (zone)
@@ -101,6 +110,7 @@ const char *AppCore_GetLinZoneText(uint8_t zone)
     }
 }
 
+// 초기 화면에 표시할 기본 문구를 설정한다.
 static void AppCore_InitDefaultTexts(AppCore *app)
 {
     if (app == NULL)
@@ -116,6 +126,9 @@ static void AppCore_InitDefaultTexts(AppCore *app)
     AppCore_SetLinLinkText(app, "waiting");
 }
 
+// command code만 포함하는 단순 CAN 요청을 큐에 적재한다.
+// master 정책에서 짧은 명령을 자주 사용하므로,
+// 공통 호출 형태를 별도 보조 함수로 분리하였다.
 uint8_t AppCore_QueueCanCommandCode(AppCore *app,
                                     uint8_t target_node_id,
                                     uint8_t command_code,
@@ -134,6 +147,9 @@ uint8_t AppCore_QueueCanCommandCode(AppCore *app,
                                    need_response) == INFRA_STATUS_OK) ? 1U : 0U;
 }
 
+// master가 쓰는 콘솔과 CAN 경로를 함께 초기화한다.
+// operator 입력과 원격 명령 통신이 바로 이어지도록,
+// 두 경로를 한 단계에서 함께 초기화한다.
 InfraStatus AppCore_InitConsoleCan(AppCore *app)
 {
     CanModuleConfig can_config;
@@ -161,6 +177,7 @@ InfraStatus AppCore_InitConsoleCan(AppCore *app)
     return INFRA_STATUS_OK;
 }
 
+// CAN service 결과를 콘솔 표시용 짧은 문장으로 변환한다.
 static void AppCore_FormatCanResult(const CanServiceResult *result, char *buffer, size_t size)
 {
     const char *name;
@@ -239,7 +256,12 @@ static void AppCore_FormatCanResult(const CanServiceResult *result, char *buffer
                    (unsigned int)result->result_code);
 }
 
-static void AppCore_HandleCanIncoming(AppCore *app, const CanMessage *message)
+// 새로 수신한 CAN 메시지를 종류별로 해석하여 master 정책으로 전달한다.
+// event와 text는 즉시 UI에 반영하고,
+// command는 필요하면 응답까지 만들어 다시 queue에 넣는다.
+static void AppCore_HandleCanIncoming(AppCore *app,
+                                      const CanMessage *message,
+                                      uint32_t now_ms)
 {
     char    buffer[APP_CONSOLE_RESULT_VIEW_SIZE];
     uint8_t response_code;
@@ -279,7 +301,7 @@ static void AppCore_HandleCanIncoming(AppCore *app, const CanMessage *message)
     }
 
     response_code = CAN_RES_NOT_SUPPORTED;
-    AppMaster_HandleCanCommand(app, message, &response_code);
+    AppMaster_HandleCanCommand(app, message, now_ms, &response_code);
 
     (void)snprintf(buffer,
                    sizeof(buffer),
@@ -298,6 +320,9 @@ static void AppCore_HandleCanIncoming(AppCore *app, const CanMessage *message)
     }
 }
 
+// master용 AppCore 전체 상태를 초기화한다.
+// 기본 텍스트와 역할별 모듈 준비를 끝낸 뒤,
+// 성공했을 때만 정상 실행 상태로 전환한다.
 InfraStatus AppCore_Init(AppCore *app)
 {
     InfraStatus status;
@@ -311,6 +336,7 @@ InfraStatus AppCore_Init(AppCore *app)
     app->local_node_id = RuntimeIo_GetLocalNodeId();
     app->lin_last_reported_zone = 0xFFU;
     app->lin_last_reported_lock = 0xFFU;
+    app->lin_last_reported_fault = 0xFFU;
     AppCore_InitDefaultTexts(app);
 
     status = AppMaster_Init(app);
@@ -323,6 +349,9 @@ InfraStatus AppCore_Init(AppCore *app)
     return INFRA_STATUS_OK;
 }
 
+// tick ISR에서 LIN timeout service 쪽으로 신호를 넘긴다.
+// 여기서는 아주 짧은 연결만 맡고,
+// 실제 LIN 상태 전개는 task 문맥에서 계속 이어간다.
 void AppCore_OnTickIsr(void *context)
 {
     AppCore *app;
@@ -336,6 +365,7 @@ void AppCore_OnTickIsr(void *context)
     LinModule_OnBaseTick(&app->lin_module);
 }
 
+// 살아 있음을 나타내는 간단한 heartbeat 카운터를 증가시킨다.
 void AppCore_TaskHeartbeat(AppCore *app, uint32_t now_ms)
 {
     (void)now_ms;
@@ -346,6 +376,7 @@ void AppCore_TaskHeartbeat(AppCore *app, uint32_t now_ms)
     }
 }
 
+// 콘솔 UART 입력과 출력 진행을 한 번 처리한다.
 void AppCore_TaskUart(AppCore *app, uint32_t now_ms)
 {
     if ((app == NULL) || (app->console_enabled == 0U))
@@ -357,6 +388,8 @@ void AppCore_TaskUart(AppCore *app, uint32_t now_ms)
     AppConsole_Task(&app->console, now_ms);
 }
 
+// 콘솔에서 꺼낸 CAN 요청을 제출하고 결과와 수신 메시지를 소비한다.
+// master 입장에서는 operator 입력, 원격 응답, 원격 요청이 모두 이 task에서 만난다.
 void AppCore_TaskCan(AppCore *app, uint32_t now_ms)
 {
     AppConsoleCanCommand command;
@@ -364,6 +397,9 @@ void AppCore_TaskCan(AppCore *app, uint32_t now_ms)
     CanMessage           message;
     char                 buffer[APP_CONSOLE_RESULT_VIEW_SIZE];
     uint8_t              activity;
+    uint8_t              command_count;
+    uint8_t              result_count;
+    uint8_t              incoming_count;
 
     if ((app == NULL) || (app->can_enabled == 0U))
     {
@@ -371,44 +407,26 @@ void AppCore_TaskCan(AppCore *app, uint32_t now_ms)
     }
 
     activity = 0U;
-    while (app->console_enabled != 0U && AppConsole_TryPopCanCommand(&app->console, &command) != 0U)
+    command_count = 0U;
+    while ((command_count < APP_CAN_MAX_CONSOLE_COMMANDS_PER_TICK) &&
+           (app->console_enabled != 0U) &&
+           (AppConsole_TryPopCanCommand(&app->console, &command) != 0U))
     {
+        command_count++;
         switch (command.type)
         {
+            // TEMP:
+            // AppConsoleCanCommandType(OPEN/CLOSE/OFF/TEST)와
+            // CanCommandCode(OPEN/CLOSE/OFF/TEST)의 enum 값이 현재 동일하다는 전제에 의존
+            // 콘솔 명령 enum 또는 CAN 명령 enum 순서/값이 바뀌면 깨질 수 있으므로
+            // 추후 반드시 명시적 매핑 함수 또는 테이블로 교체필요
             case APP_CONSOLE_CAN_CMD_OPEN:
-                (void)CanModule_QueueCommand(&app->can_module,
-                                             command.target_node_id,
-                                             CAN_CMD_OPEN,
-                                             0U,
-                                             0U,
-                                             1U);
-                activity = 1U;
-                break;
-
             case APP_CONSOLE_CAN_CMD_CLOSE:
-                (void)CanModule_QueueCommand(&app->can_module,
-                                             command.target_node_id,
-                                             CAN_CMD_CLOSE,
-                                             0U,
-                                             0U,
-                                             1U);
-                activity = 1U;
-                break;
-
             case APP_CONSOLE_CAN_CMD_OFF:
-                (void)CanModule_QueueCommand(&app->can_module,
-                                             command.target_node_id,
-                                             CAN_CMD_OFF,
-                                             0U,
-                                             0U,
-                                             1U);
-                activity = 1U;
-                break;
-
             case APP_CONSOLE_CAN_CMD_TEST:
                 (void)CanModule_QueueCommand(&app->can_module,
                                              command.target_node_id,
-                                             CAN_CMD_TEST,
+                                             command.type,
                                              0U,
                                              0U,
                                              1U);
@@ -437,16 +455,22 @@ void AppCore_TaskCan(AppCore *app, uint32_t now_ms)
     }
 
     CanModule_Task(&app->can_module, now_ms);
-    while (CanModule_TryPopResult(&app->can_module, &result) != 0U)
+    result_count = 0U;
+    while ((result_count < APP_CAN_MAX_RESULTS_PER_TICK) &&
+           (CanModule_TryPopResult(&app->can_module, &result) != 0U))
     {
+        result_count++;
         AppCore_FormatCanResult(&result, buffer, sizeof(buffer));
         AppCore_SetResultText(app, buffer);
         activity = 1U;
     }
 
-    while (CanModule_TryPopIncoming(&app->can_module, &message) != 0U)
+    incoming_count = 0U;
+    while ((incoming_count < APP_CAN_MAX_INCOMING_PER_TICK) &&
+           (CanModule_TryPopIncoming(&app->can_module, &message) != 0U))
     {
-        AppCore_HandleCanIncoming(app, &message);
+        incoming_count++;
+        AppCore_HandleCanIncoming(app, &message, now_ms);
         activity = 1U;
     }
 
@@ -457,9 +481,13 @@ void AppCore_TaskCan(AppCore *app, uint32_t now_ms)
     }
 }
 
+// callback에서 적재해 둔 LIN event를 빠르게 처리한다.
+// 최신 상태가 생기면 바로 master policy로 넘기고,
+// 오랫동안 새 상태가 없을 때는 링크 문구도 함께 갱신한다.
 void AppCore_TaskLinFast(AppCore *app, uint32_t now_ms)
 {
     LinStatusFrame status;
+    InfraStatus    status_ready;
 
     if ((app == NULL) || (app->lin_enabled == 0U))
     {
@@ -470,9 +498,33 @@ void AppCore_TaskLinFast(AppCore *app, uint32_t now_ms)
     if (LinModule_ConsumeFreshStatus(&app->lin_module, &status) != 0U)
     {
         AppMaster_HandleFreshLinStatus(app, &status);
+        return;
+    }
+
+    if (app->ok_relay.state != APP_MASTER_OK_RELAY_IDLE)
+    {
+        return;
+    }
+
+    status_ready = LinModule_GetLatestStatusIfFresh(&app->lin_module,
+                                                    now_ms,
+                                                    APP_LIN_STATUS_MAX_AGE_MS,
+                                                    &status);
+    if (status_ready == INFRA_STATUS_TIMEOUT)
+    {
+        AppCore_SetLinLinkText(app, "stale");
     }
 }
 
+// TEMP:
+// 현재 master poll은 poll_period_ms마다 header 1개만 시작한다.
+// 따라서 status poll과 ok token 전송은 같은 poll 에서 진행된다.
+//
+// 즉, 20ms 단일 슬롯에서 status 또는 ok 중 하나를 선택하는 단순구현이다.
+//
+// 현재는 단순성을 위해 유지하지만,
+// relay 반응성 / 상태 감시 / frame 확장성을 좀더 디테일하게 잡는다면 
+// status/ok를 분리한 schedule table 또는 더 짧은 base poll 주기로 구현할 필요가 있다.
 void AppCore_TaskLinPoll(AppCore *app, uint32_t now_ms)
 {
     if (app == NULL)
@@ -484,7 +536,7 @@ void AppCore_TaskLinPoll(AppCore *app, uint32_t now_ms)
     {
         if (AppConsole_ConsumeLocalOk(&app->console) != 0U)
         {
-            AppMaster_RequestOk(app);
+            AppMaster_RequestOk(app, now_ms);
         }
     }
 
@@ -493,9 +545,12 @@ void AppCore_TaskLinPoll(AppCore *app, uint32_t now_ms)
         LinModule_TaskPoll(&app->lin_module, now_ms);
     }
 
-    AppMaster_AfterLinPoll(app);
+    AppMaster_AfterLinPoll(app, now_ms);
 }
 
+// 현재 AppCore 상태를 콘솔 view 문자열로 정리해 렌더링한다.
+// 각 기능의 내부 구조를 그대로 노출하기보다,
+// operator가 보기 좋은 요약 형태로 묶는 역할을 한다.
 void AppCore_TaskRender(AppCore *app, uint32_t now_ms)
 {
     char        task_text[APP_CONSOLE_TASK_VIEW_SIZE];
@@ -512,7 +567,7 @@ void AppCore_TaskRender(AppCore *app, uint32_t now_ms)
     }
 
     can_text = (app->can_last_activity != 0U) ? "ok" : "idle";
-    uart_text = (UartService_HasError(&app->console.uart) == 0U) ? "ok" : "error";
+    uart_text = (AppConsole_IsError(&app->console) == 0U) ? "ok" : "error";
 
     (void)snprintf(task_text,
                    sizeof(task_text),
@@ -548,3 +603,7 @@ void AppCore_TaskRender(AppCore *app, uint32_t now_ms)
     AppConsole_SetValueText(&app->console, value_text);
     AppConsole_Render(&app->console);
 }
+
+// 참고:
+// CAN 요청 enqueue 실패를 현재는 일부 화면 문구로만 흘려 보내는 경향이 있어서,
+// 나중에는 실패 원인을 조금 더 분명히 남기면 디버깅이 한결 쉬워진다.
